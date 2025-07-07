@@ -1,0 +1,45 @@
+FROM node:18-alpine AS builder
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# package.json과 package-lock.json 복사
+COPY package*.json ./
+
+# 의존성 설치
+RUN npm ci
+
+# 소스 코드 복사
+COPY . .
+
+# 프로덕션 빌드
+RUN npm run build
+
+# 프로덕션 이미지
+FROM node:18-alpine AS runner
+
+WORKDIR /app
+
+# 필요한 파일만 복사
+COPY --from=builder /app/next.config.mjs ./
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
+# 사용자 생성
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# 권한 설정
+RUN chown -R nextjs:nodejs /app
+USER nextjs
+
+# 포트 노출
+EXPOSE 3000
+
+# 환경변수 설정
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# 서버 시작
+CMD ["node", "server.js"] 

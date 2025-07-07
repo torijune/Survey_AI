@@ -1,0 +1,626 @@
+import asyncio
+import json
+import io
+import re
+from typing import Dict, Any, Optional, List, Union
+import pandas as pd
+import numpy as np
+from langchain_openai import ChatOpenAI
+from langchain.schema import HumanMessage, SystemMessage
+import os
+from dotenv import load_dotenv
+import openpyxl
+from scipy import stats
+
+load_dotenv()
+
+class AgentState:
+    """Agent 상태를 관리하는 클래스"""
+    def __init__(self, **kwargs):
+        self.query = kwargs.get("query", "")
+        self.file_path = kwargs.get("file_path", "")
+        self.analysis_type = kwargs.get("analysis_type", True)
+        self.selected_question = kwargs.get("selected_question", "")
+        self.selected_table = kwargs.get("selected_table", None)
+        self.selected_key = kwargs.get("selected_key", "")
+        self.anchor = kwargs.get("anchor", [])
+        self.linearized_table = kwargs.get("linearized_table", "")
+        self.numeric_analysis = kwargs.get("numeric_analysis", "")
+        self.table_analysis = kwargs.get("table_analysis", "")
+        self.revised_analysis = kwargs.get("revised_analysis", "")
+        self.hallucination_check = kwargs.get("hallucination_check", "")
+        self.hallucination_reject_num = kwargs.get("hallucination_reject_num", 0)
+        self.feedback = kwargs.get("feedback", "")
+        self.polishing_result = kwargs.get("polishing_result", "")
+        self.generated_hypotheses = kwargs.get("generated_hypotheses", "")
+        self.uploaded_file = kwargs.get("uploaded_file", None)
+        self.raw_data_file = kwargs.get("raw_data_file", None)
+        self.raw_data = kwargs.get("raw_data", None)
+        self.raw_variables = kwargs.get("raw_variables", None)
+        self.raw_code_guide = kwargs.get("raw_code_guide", None)
+        self.raw_question = kwargs.get("raw_question", None)
+        self.test_type = kwargs.get("test_type", None)
+        self.ft_test_result = kwargs.get("ft_test_result", {})
+        self.ft_test_summary = kwargs.get("ft_test_summary", "")
+        self.ft_error = kwargs.get("ft_error", None)
+        self.lang = kwargs.get("lang", "한국어")
+        self.tables = kwargs.get("tables", {})
+        self.question_texts = kwargs.get("question_texts", {})
+        self.question_keys = kwargs.get("question_keys", [])
+        self.revised_analysis_history = kwargs.get("revised_analysis_history", [])
+        self.user_id = kwargs.get("user_id", None)
+        self.survey_data = kwargs.get("survey_data", None)
+
+class LangGraphWorkflow:
+    def __init__(self):
+        self.llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.3,
+            api_key=os.getenv("OPENAI_API_KEY")
+        )
+    
+    def normalize_key(self, key: str) -> str:
+        """키 정규화"""
+        return key.strip().replace(' ', '').replace('-', '').replace('_', '').replace('.', '').upper()
+    
+    def find_matching_key(self, target_key: str, available_keys: List[str]) -> Optional[str]:
+        """키 매칭 찾기"""
+        normalized_target = self.normalize_key(target_key)
+        
+        # 정확한 매칭
+        for key in available_keys:
+            if self.normalize_key(key) == normalized_target:
+                return key
+        
+        # 포함 관계 매칭
+        for key in available_keys:
+            normalized_key = self.normalize_key(key)
+            if normalized_key in normalized_target or normalized_target in normalized_key:
+                return key
+        
+        # 유사도 기반 매칭 (Levenshtein distance)
+        best_match = None
+        best_score = float('inf')
+        
+        for key in available_keys:
+            normalized_key = self.normalize_key(key)
+            distance = self.levenshtein_distance(normalized_target, normalized_key)
+            max_length = max(len(normalized_target), len(normalized_key))
+            similarity = distance / max_length
+            
+            if similarity < 0.3 and similarity < best_score:
+                best_match = key
+                best_score = similarity
+        
+        return best_match
+    
+    def levenshtein_distance(self, str1: str, str2: str) -> int:
+        """Levenshtein 거리 계산"""
+        matrix = [[0] * (len(str2) + 1) for _ in range(len(str1) + 1)]
+        
+        for i in range(len(str1) + 1):
+            matrix[i][0] = i
+        
+        for j in range(len(str2) + 1):
+            matrix[0][j] = j
+        
+        for i in range(1, len(str1) + 1):
+            for j in range(1, len(str2) + 1):
+                if str1[i-1] == str2[j-1]:
+                    matrix[i][j] = matrix[i-1][j-1]
+                else:
+                    matrix[i][j] = min(
+                        matrix[i-1][j-1] + 1,
+                        matrix[i][j-1] + 1,
+                        matrix[i-1][j] + 1
+                    )
+        
+        return matrix[len(str1)][len(str2)]
+    
+    async def load_survey_tables(self, file_content: bytes, file_name: str, sheet_name: str = "통계표") -> Dict[str, Any]:
+        """설문 테이블 로드"""
+        try:
+            # Excel 파일 읽기
+            workbook = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
+            
+            # 시트 선택
+            worksheet = workbook[sheet_name] if sheet_name in workbook.sheetnames else workbook.active
+            
+            # 데이터 추출
+            data = []
+            for row in worksheet.iter_rows(values_only=True):
+                data.append(row)
+            
+            # 질문 인덱스 찾기
+            question_indices = []
+            patterns = [
+                r'^[A-Z]+\d*[-.]?\d*\.',  # A1., B2., A1-1. 등
+                r'^[A-Z]+\d*$',           # A1, B2 등 (점 없음)
+                r'^[A-Z]+\d*[-.]?\d*$',   # A1-1, B2-1 등 (점 없음)
+                r'^Q\d+',                 # Q1, Q2 등
+                r'^질문\s*\d+',           # 질문 1, 질문 2 등
+            ]
+            
+            for i, row in enumerate(data):
+                if row and row[0]:
+                    cell_value = str(row[0])
+                    for pattern in patterns:
+                        if re.match(pattern, cell_value):
+                            question_indices.append(i)
+                            break
+            
+            # 질문을 찾지 못한 경우 대체 방법
+            if not question_indices:
+                for i in range(1, min(len(data), 20)):
+                    if data[i] and data[i][0] and len(str(data[i][0])) > 5:
+                        cell_value = str(data[i][0])
+                        if not any(keyword in cell_value for keyword in ['대분류', '소분류']):
+                            question_indices.append(i)
+                            break
+            
+            # 테이블 파싱
+            tables = {}
+            question_texts = {}
+            question_keys = []
+            
+            for i, idx in enumerate(question_indices):
+                if idx + 1 < len(data):
+                    # 질문 텍스트
+                    question_text = str(data[idx][0]) if data[idx] and data[idx][0] else f"Question_{i+1}"
+                    question_key = f"Q{i+1}"
+                    
+                    # 테이블 데이터
+                    table_data = []
+                    for j in range(idx + 1, len(data)):
+                        if data[j] and any(data[j]):  # 빈 행이 아닌 경우
+                            table_data.append(data[j])
+                        elif j > idx + 1 and not any(data[j]):  # 연속된 빈 행
+                            break
+                    
+                    if table_data:
+                        # DataFrame 생성
+                        df = pd.DataFrame(table_data[1:], columns=table_data[0] if table_data else [])
+                        tables[question_key] = df
+                        question_texts[question_key] = question_text
+                        question_keys.append(question_key)
+            
+            return {
+                "tables": tables,
+                "question_texts": question_texts,
+                "question_keys": question_keys
+            }
+            
+        except Exception as e:
+            raise Exception(f"설문 테이블 로드 실패: {str(e)}")
+    
+    def linearize_row_wise(self, table: pd.DataFrame) -> str:
+        """테이블을 행 단위로 선형화"""
+        if table is None or table.empty:
+            return ""
+        
+        # 숫자 컬럼만 선택
+        numeric_cols = table.select_dtypes(include=[np.number]).columns.tolist()
+        if not numeric_cols:
+            return ""
+        
+        # 첫 번째 컬럼 (그룹명)과 숫자 컬럼들만 사용
+        result_cols = [table.columns[0]] + numeric_cols
+        result_df = table[result_cols]
+        
+        # 행 단위로 문자열 변환
+        rows = []
+        for _, row in result_df.iterrows():
+            row_str = " | ".join([str(val) for val in row.values])
+            rows.append(row_str)
+        
+        return "\n".join(rows)
+    
+    async def make_openai_call(self, messages: List[Dict[str, str]], model: str = "gpt-4o-mini", temperature: float = 0.3) -> str:
+        """OpenAI API 호출"""
+        try:
+            langchain_messages = []
+            for msg in messages:
+                if msg["role"] == "system":
+                    langchain_messages.append(SystemMessage(content=msg["content"]))
+                else:
+                    langchain_messages.append(HumanMessage(content=msg["content"]))
+            
+            response = await self.llm.ainvoke(langchain_messages)
+            return response.content.strip()
+        except Exception as e:
+            raise Exception(f"OpenAI API 호출 실패: {str(e)}")
+    
+    async def table_parser_node(self, state: AgentState, on_step=None) -> AgentState:
+        """테이블 파서 노드"""
+        if on_step:
+            on_step("📊 테이블 파서 노드 시작")
+        
+        # 파일에서 테이블 파싱
+        if state.uploaded_file:
+            parsed_data = await self.load_survey_tables(
+                state.uploaded_file,
+                state.file_path
+            )
+            state.tables = parsed_data["tables"]
+            state.question_texts = parsed_data["question_texts"]
+            state.question_keys = parsed_data["question_keys"]
+        
+        # 선택된 키 매칭
+        if state.selected_key and state.tables:
+            matching_key = self.find_matching_key(state.selected_key, list(state.tables.keys()))
+            if matching_key:
+                state.selected_key = matching_key
+                state.selected_table = state.tables[matching_key]
+                state.selected_question = state.question_texts[matching_key]
+            elif state.analysis_type:
+                raise Exception(f"선택된 질문 키 '{state.selected_key}'에 해당하는 테이블이 없습니다.")
+            else:
+                # 배치 분석의 경우 첫 번째 질문 사용
+                state.selected_key = state.question_keys[0]
+                state.selected_table = state.tables[state.selected_key]
+                state.selected_question = state.question_texts[state.selected_key]
+        
+        # 테이블 선형화
+        if state.selected_table is not None:
+            state.linearized_table = self.linearize_row_wise(state.selected_table)
+        
+        return state
+    
+    async def hypothesis_generate_node(self, state: AgentState, on_step=None) -> AgentState:
+        """가설 생성 노드"""
+        if on_step:
+            on_step("💡 가설 생성 노드 시작")
+        
+        prompt = f"""다음 설문 데이터를 분석하여 통계적 가설을 생성해주세요.
+
+질문: {state.selected_question}
+데이터: {state.linearized_table}
+
+다음 형식으로 가설을 생성해주세요:
+1. 주요 가설 (H1, H2, H3...)
+2. 통계 검정 방법 제안
+3. 예상 결과
+
+언어: {state.lang}"""
+
+        messages = [
+            {"role": "system", "content": "당신은 통계 분석 전문가입니다."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        state.generated_hypotheses = await self.make_openai_call(messages)
+        return state
+    
+    def rule_based_test_type_decision(self, columns: List[str], question_text: str = "") -> str:
+        """규칙 기반 검정 방법 결정"""
+        # 컬럼 수에 따른 결정
+        if len(columns) <= 3:
+            return "manual"
+        
+        # 질문 텍스트 분석
+        question_lower = question_text.lower()
+        if any(keyword in question_lower for keyword in ["차이", "다른", "비교", "평균"]):
+            return "t-test"
+        elif any(keyword in question_lower for keyword in ["관련", "연관", "상관"]):
+            return "chi-square"
+        else:
+            return "auto"
+    
+    async def test_decision_node(self, state: AgentState, on_step=None) -> AgentState:
+        """검정 방법 결정 노드"""
+        if on_step:
+            on_step("🧭 통계 검정 결정 노드 시작")
+        
+        if state.selected_table is not None:
+            columns = state.selected_table.columns.tolist()
+            test_type = self.rule_based_test_type_decision(columns, state.selected_question)
+            state.test_type = test_type
+        
+        return state
+    
+    async def ft_analysis_node(self, state: AgentState, on_step=None) -> AgentState:
+        """F/T 분석 노드"""
+        if on_step:
+            on_step("✅ F/T 분석 노드 시작")
+        
+        try:
+            if state.selected_table is not None:
+                # 통계 분석 실행
+                result = await self.run_statistical_tests(
+                    state.test_type,
+                    state.selected_table,
+                    state.selected_key
+                )
+                state.ft_test_result = result
+                
+                # 결과 요약
+                summary = self.summarize_ft_test(result, state.lang)
+                state.ft_test_summary = summary
+        except Exception as e:
+            state.ft_error = str(e)
+        
+        return state
+    
+    async def run_statistical_tests(self, test_type: str, df: pd.DataFrame, question_key: str) -> List[Dict[str, Any]]:
+        """통계 검정 실행"""
+        results = []
+        
+        try:
+            if test_type == "t-test":
+                # t-test 실행
+                numeric_cols = df.select_dtypes(include=[np.number]).columns
+                if len(numeric_cols) >= 2:
+                    for i in range(len(numeric_cols)):
+                        for j in range(i+1, len(numeric_cols)):
+                            col1, col2 = numeric_cols[i], numeric_cols[j]
+                            stat, p_value = stats.ttest_ind(df[col1].dropna(), df[col2].dropna())
+                            results.append({
+                                "test_type": "t-test",
+                                "columns": [col1, col2],
+                                "statistic": float(stat),
+                                "p_value": float(p_value),
+                                "significant": p_value < 0.05
+                            })
+            
+            elif test_type == "chi-square":
+                # chi-square test 실행
+                categorical_cols = df.select_dtypes(include=['object']).columns
+                if len(categorical_cols) >= 2:
+                    for i in range(len(categorical_cols)):
+                        for j in range(i+1, len(categorical_cols)):
+                            col1, col2 = categorical_cols[i], categorical_cols[j]
+                            contingency_table = pd.crosstab(df[col1], df[col2])
+                            chi2, p_value, dof, expected = stats.chi2_contingency(contingency_table)
+                            results.append({
+                                "test_type": "chi-square",
+                                "columns": [col1, col2],
+                                "statistic": float(chi2),
+                                "p_value": float(p_value),
+                                "significant": p_value < 0.05
+                            })
+            
+            else:
+                # 기본 기술통계
+                numeric_cols = df.select_dtypes(include=[np.number]).columns
+                for col in numeric_cols:
+                    stats_data = df[col].describe()
+                    results.append({
+                        "test_type": "descriptive",
+                        "column": col,
+                        "mean": float(stats_data['mean']),
+                        "std": float(stats_data['std']),
+                        "min": float(stats_data['min']),
+                        "max": float(stats_data['max'])
+                    })
+        
+        except Exception as e:
+            results.append({
+                "test_type": "error",
+                "error": str(e)
+            })
+        
+        return results
+    
+    def summarize_ft_test(self, results: List[Dict[str, Any]], lang: str = "한국어") -> str:
+        """통계 검정 결과 요약"""
+        if not results:
+            return "통계 분석 결과가 없습니다."
+        
+        summary_parts = []
+        
+        for result in results:
+            if result.get("test_type") == "t-test":
+                col1, col2 = result["columns"]
+                p_value = result["p_value"]
+                significant = "유의함" if result["significant"] else "유의하지 않음"
+                summary_parts.append(f"t-test ({col1} vs {col2}): p={p_value:.4f} ({significant})")
+            
+            elif result.get("test_type") == "chi-square":
+                col1, col2 = result["columns"]
+                p_value = result["p_value"]
+                significant = "유의함" if result["significant"] else "유의하지 않음"
+                summary_parts.append(f"Chi-square ({col1} vs {col2}): p={p_value:.4f} ({significant})")
+            
+            elif result.get("test_type") == "descriptive":
+                col = result["column"]
+                mean = result["mean"]
+                std = result["std"]
+                summary_parts.append(f"{col}: 평균={mean:.2f}, 표준편차={std:.2f}")
+        
+        return "\n".join(summary_parts)
+    
+    async def get_anchor_node(self, state: AgentState, on_step=None) -> AgentState:
+        """앵커 추출 노드"""
+        if on_step:
+            on_step("📌 앵커 추출 노드 시작")
+        
+        prompt = f"""다음 데이터에서 주요 앵커 포인트를 추출해주세요.
+
+데이터: {state.linearized_table}
+통계 결과: {state.ft_test_summary}
+
+주요 앵커 포인트를 리스트로 작성해주세요."""
+
+        messages = [
+            {"role": "system", "content": "당신은 데이터 분석 전문가입니다."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        anchor_response = await self.make_openai_call(messages)
+        state.anchor = [line.strip() for line in anchor_response.split('\n') if line.strip()]
+        
+        return state
+    
+    async def table_analyzer(self, state: AgentState, on_step=None) -> AgentState:
+        """테이블 분석 노드"""
+        if on_step:
+            on_step("🤖 테이블 분석 노드 시작")
+        
+        prompt = f"""다음 데이터를 종합적으로 분석해주세요.
+
+질문: {state.selected_question}
+데이터: {state.linearized_table}
+통계 결과: {state.ft_test_summary}
+앵커 포인트: {', '.join(state.anchor)}
+
+다음 형식으로 분석해주세요:
+1. 데이터 개요
+2. 주요 발견사항
+3. 통계적 의미
+4. 실무적 함의
+
+언어: {state.lang}"""
+
+        messages = [
+            {"role": "system", "content": "당신은 데이터 분석 전문가입니다."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        state.table_analysis = await self.make_openai_call(messages)
+        return state
+    
+    async def hallucination_check_node(self, state: AgentState, on_step=None) -> AgentState:
+        """환각 검증 노드"""
+        if on_step:
+            on_step("🧠 환각 평가 노드 시작")
+        
+        prompt = f"""다음 분석 결과가 데이터에 근거한 것인지 검증해주세요.
+
+원본 데이터: {state.linearized_table}
+분석 결과: {state.table_analysis}
+
+다음 중 하나로 답해주세요:
+- accept: 데이터에 근거한 분석
+- reject: 데이터에 근거하지 않은 분석
+
+이유도 함께 설명해주세요."""
+
+        messages = [
+            {"role": "system", "content": "당신은 데이터 검증 전문가입니다."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        check_response = await self.make_openai_call(messages)
+        
+        if "accept" in check_response.lower():
+            state.hallucination_check = "accept"
+        elif "reject" in check_response.lower():
+            state.hallucination_check = "reject"
+        else:
+            state.hallucination_check = "reject"  # 기본값
+        
+        state.feedback = check_response
+        return state
+    
+    async def revise_table_analysis(self, state: AgentState, on_step=None) -> AgentState:
+        """분석 수정 노드"""
+        if on_step:
+            on_step("✏️ 분석 수정 노드 시작")
+        
+        # 이전 분석을 히스토리에 저장
+        if state.table_analysis:
+            if not state.revised_analysis_history:
+                state.revised_analysis_history = []
+            state.revised_analysis_history.append(state.table_analysis)
+        
+        prompt = f"""이전 분석이 거부되었습니다. 데이터에 더 근거한 분석을 작성해주세요.
+
+원본 데이터: {state.linearized_table}
+통계 결과: {state.ft_test_summary}
+피드백: {state.feedback}
+
+데이터에 엄격히 근거하여 다시 분석해주세요."""
+
+        messages = [
+            {"role": "system", "content": "당신은 데이터 분석 전문가입니다. 데이터에 엄격히 근거하여 분석하세요."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        state.revised_analysis = await self.make_openai_call(messages)
+        state.table_analysis = state.revised_analysis
+        
+        return state
+    
+    async def sentence_polish_node(self, state: AgentState, on_step=None) -> AgentState:
+        """문장 다듬기 노드"""
+        if on_step:
+            on_step("💅 문장 다듬기 노드 시작")
+        
+        prompt = f"""다음 분석 결과를 더 명확하고 읽기 쉽게 다듬어주세요.
+
+분석 결과: {state.table_analysis}
+
+다음 요구사항을 만족하도록 수정해주세요:
+1. 명확하고 간결한 문장
+2. 논리적 구조
+3. 실무자가 이해하기 쉬운 표현
+4. 구체적인 수치와 근거 포함
+
+언어: {state.lang}"""
+
+        messages = [
+            {"role": "system", "content": "당신은 문서 작성 전문가입니다."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        state.polishing_result = await self.make_openai_call(messages)
+        return state
+    
+    async def execute(self, file_content: bytes, file_name: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
+        """워크플로우 실행"""
+        try:
+            # 초기 상태 설정
+            state = AgentState(
+                uploaded_file=file_content,
+                file_path=file_name,
+                analysis_type=options.get("analysis_type", True) if options else True,
+                selected_key=options.get("selected_key", "") if options else "",
+                lang=options.get("lang", "한국어") if options else "한국어",
+                user_id=options.get("user_id") if options else None
+            )
+            
+            on_step = options.get("on_step") if options else None
+            
+            # 워크플로우 실행
+            state = await self.table_parser_node(state, on_step)
+            state = await self.hypothesis_generate_node(state, on_step)
+            state = await self.test_decision_node(state, on_step)
+            state = await self.ft_analysis_node(state, on_step)
+            state = await self.get_anchor_node(state, on_step)
+            state = await self.table_analyzer(state, on_step)
+            
+            # 환각 검증 및 수정 루프
+            max_revisions = 4
+            while state.hallucination_reject_num < max_revisions:
+                state = await self.hallucination_check_node(state, on_step)
+                if state.hallucination_check == "accept":
+                    break
+                elif state.hallucination_check == "reject":
+                    if state.hallucination_reject_num >= 4:
+                        if on_step:
+                            on_step("⚠️ 거부 횟수 초과, 종료합니다.")
+                        break
+                    state = await self.revise_table_analysis(state, on_step)
+                    state.hallucination_reject_num += 1
+                else:
+                    raise Exception(f"예상치 못한 결정: {state.hallucination_check}")
+            
+            state = await self.sentence_polish_node(state, on_step)
+            
+            return {
+                "success": True,
+                "result": {
+                    "polishing_result": state.polishing_result,
+                    "table_analysis": state.table_analysis,
+                    "ft_test_summary": state.ft_test_summary,
+                    "generated_hypotheses": state.generated_hypotheses,
+                    "anchor": state.anchor,
+                    "revised_analysis_history": state.revised_analysis_history
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            } 

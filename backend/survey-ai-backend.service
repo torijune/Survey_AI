@@ -1,0 +1,15 @@
+[Unit]
+Description=Survey AI Python Backend
+After=network.target
+
+[Service]
+Type=simple
+User=jang-wonjun
+WorkingDirectory=/Users/jang-wonjun/Desktop/Dev/Survey_AI/backend
+Environment=PATH=/Users/jang-wonjun/Desktop/Dev/Survey_AI/backend/venv/bin
+ExecStart=/Users/jang-wonjun/Desktop/Dev/Survey_AI/backend/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target 
