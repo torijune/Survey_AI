@@ -11,6 +11,8 @@ import os
 from dotenv import load_dotenv
 import openpyxl
 from scipy import stats
+from collections import defaultdict
+import openai
 
 load_dotenv()
 
@@ -117,81 +119,11 @@ class LangGraphWorkflow:
         
         return matrix[len(str1)][len(str2)]
     
-    async def load_survey_tables(self, file_content: bytes, file_name: str, sheet_name: str = "통계표") -> Dict[str, Any]:
-        """설문 테이블 로드"""
-        try:
-            # Excel 파일 읽기
-            workbook = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
-            
-            # 시트 선택
-            worksheet = workbook[sheet_name] if sheet_name in workbook.sheetnames else workbook.active
-            
-            # 데이터 추출
-            data = []
-            for row in worksheet.iter_rows(values_only=True):
-                data.append(row)
-            
-            # 질문 인덱스 찾기
-            question_indices = []
-            patterns = [
-                r'^[A-Z]+\d*[-.]?\d*\.',  # A1., B2., A1-1. 등
-                r'^[A-Z]+\d*$',           # A1, B2 등 (점 없음)
-                r'^[A-Z]+\d*[-.]?\d*$',   # A1-1, B2-1 등 (점 없음)
-                r'^Q\d+',                 # Q1, Q2 등
-                r'^질문\s*\d+',           # 질문 1, 질문 2 등
-            ]
-            
-            for i, row in enumerate(data):
-                if row and row[0]:
-                    cell_value = str(row[0])
-                    for pattern in patterns:
-                        if re.match(pattern, cell_value):
-                            question_indices.append(i)
-                            break
-            
-            # 질문을 찾지 못한 경우 대체 방법
-            if not question_indices:
-                for i in range(1, min(len(data), 20)):
-                    if data[i] and data[i][0] and len(str(data[i][0])) > 5:
-                        cell_value = str(data[i][0])
-                        if not any(keyword in cell_value for keyword in ['대분류', '소분류']):
-                            question_indices.append(i)
-                            break
-            
-            # 테이블 파싱
-            tables = {}
-            question_texts = {}
-            question_keys = []
-            
-            for i, idx in enumerate(question_indices):
-                if idx + 1 < len(data):
-                    # 질문 텍스트
-                    question_text = str(data[idx][0]) if data[idx] and data[idx][0] else f"Question_{i+1}"
-                    question_key = f"Q{i+1}"
-                    
-                    # 테이블 데이터
-                    table_data = []
-                    for j in range(idx + 1, len(data)):
-                        if data[j] and any(data[j]):  # 빈 행이 아닌 경우
-                            table_data.append(data[j])
-                        elif j > idx + 1 and not any(data[j]):  # 연속된 빈 행
-                            break
-                    
-                    if table_data:
-                        # DataFrame 생성
-                        df = pd.DataFrame(table_data[1:], columns=table_data[0] if table_data else [])
-                        tables[question_key] = df
-                        question_texts[question_key] = question_text
-                        question_keys.append(question_key)
-            
-            return {
-                "tables": tables,
-                "question_texts": question_texts,
-                "question_keys": question_keys
-            }
-            
-        except Exception as e:
-            raise Exception(f"설문 테이블 로드 실패: {str(e)}")
+    async def load_survey_tables(self, file_content: bytes, file_name: str, sheet_name: str = "통계표"):
+        """설문 테이블 로드 - DataProcessor의 load_survey_tables와 동일하게 동작하도록 수정"""
+        from utils.data_processor import DataProcessor
+        data_processor = DataProcessor()
+        return data_processor.load_survey_tables(file_content, file_name, sheet_name)
     
     def linearize_row_wise(self, table: pd.DataFrame) -> str:
         """테이블을 행 단위로 선형화"""
@@ -291,31 +223,76 @@ class LangGraphWorkflow:
         state.generated_hypotheses = await self.make_openai_call(messages)
         return state
     
-    def rule_based_test_type_decision(self, columns: List[str], question_text: str = "") -> str:
-        """규칙 기반 검정 방법 결정"""
-        # 컬럼 수에 따른 결정
-        if len(columns) <= 3:
+    def rule_based_test_type_decision(self, columns, question_text=""):
+        """
+        컬럼명과 질문 텍스트를 기반으로 임의 분석/ft_test/chi_square를 rule 기반으로 판단
+        """
+        import re
+
+        # 1️⃣ 임의 분석 판단: 복수 응답 또는 순위 응답 패턴 존재 여부
+        multi_response_keywords = [
+            "1+2", "1+2+3", "복수", "다중", "multiple", "rank", "ranking", "우선순위"
+        ]
+        text_to_check = (" ".join(columns) + " " + question_text).lower()
+        if any(keyword.lower() in text_to_check for keyword in multi_response_keywords):
             return "manual"
-        
-        # 질문 텍스트 분석
-        question_lower = question_text.lower()
-        if any(keyword in question_lower for keyword in ["차이", "다른", "비교", "평균"]):
-            return "t-test"
-        elif any(keyword in question_lower for keyword in ["관련", "연관", "상관"]):
-            return "chi-square"
-        else:
-            return "auto"
+
+        # 2️⃣ ft_test 판단 기준: 전형적인 범주형 표현이 있는 경우
+        categorical_patterns = [
+            # 관심도 관련
+            r"전혀\s*관심", r"관심\s*없(다|는)", r"관심\s*있(다|는)", r"매우\s*관심", r"관심",
+
+            # 만족도 관련
+            r"매우\s*만족", r"만족", r"불만족", r"매우\s*불만족", r"보통",
+
+            # 찬반 관련
+            r"찬성", r"반대", r"매우\s*찬성", r"매우\s*반대", r"대체로\s*찬성", r"대체로\s*반대",
+
+            # 중요도 관련
+            r"매우\s*중요", r"중요", r"그다지\s*중요하지\s*않", r"전혀\s*중요하지\s*않",
+
+            # 심각성 인식
+            r"매우\s*심각", r"심각", r"심각하지\s*않", r"전혀\s*심각하지\s*않",
+
+            # 빈도 관련
+            r"자주", r"가끔", r"거의\s*없", r"전혀\s*없",
+
+            # 안전성 관련
+            r"안전", r"매우\s*안전", r"위험", r"매우\s*위험",
+
+            # 인지/경험 여부
+            r"들어본\s*적", r"사용한\s*적", r"경험했", r"인지",
+
+            # 태도/의향 관련
+            r"의향", r"생각", r"예정", r"계획", r"할\s*것",
+
+            # 정도 표현
+            r"매우", r"약간", r"보통", r"그다지", r"전혀"
+        ]
+        if any(any(re.search(pattern, col) for pattern in categorical_patterns) for col in columns):
+            return "ft_test"
+
+        # 3️⃣ 나머지는 chi_square
+        return "chi_square"
     
     async def test_decision_node(self, state: AgentState, on_step=None) -> AgentState:
         """검정 방법 결정 노드"""
         if on_step:
             on_step("🧭 통계 검정 결정 노드 시작")
-        
         if state.selected_table is not None:
             columns = state.selected_table.columns.tolist()
-            test_type = self.rule_based_test_type_decision(columns, state.selected_question)
+            # 단일 문항 분석이면 LLM, 일괄 분석이면 rule-based
+            if getattr(state, 'analysis_type', True):
+                # 단일 문항 분석: LLM
+                from utils.data_processor import DataProcessor
+                data_processor = DataProcessor()
+                test_type = await data_processor.llm_test_type_decision(columns, state.selected_question)
+            else:
+                # 일괄 분석: rule-based
+                from utils.data_processor import DataProcessor
+                data_processor = DataProcessor()
+                test_type = data_processor.rule_based_test_type_decision(columns, state.selected_question)
             state.test_type = test_type
-        
         return state
     
     async def ft_analysis_node(self, state: AgentState, on_step=None) -> AgentState:

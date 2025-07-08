@@ -47,6 +47,12 @@ const MODE_TOP_DESC = {
   'topic-analysis': 'FGI 가이드라인에서 주제를 추출하여 원하는 주제별로 분석을 진행합니다. 가이드라인 파일(docx) 업로드 후 주제를 선택하거나 직접 입력할 수 있습니다.'
 };
 
+// 1. 분석 분위기별 설명 텍스트
+const TONE_DESCRIPTIONS: Record<string, string> = {
+  "설명 중심": "선택한 주제에 대해 자연어로 요약 및 설명합니다.",
+  "키워드 중심": "선택한 주제에 대해 키워드와 핵심 주제 위주로 간략하게 정리합니다."
+};
+
 function RagDropzone({ onFile, lang }: { onFile: (file: File) => void; lang: string }) {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"], "text/plain": [".txt"] },
@@ -150,6 +156,7 @@ export default function FGIAnalysisPage() {
   const [fgiDocumentId, setFgiDocumentId] = useState<string | null>(null);
   const [manualTopics, setManualTopics] = useState<string[]>([]);
   const [manualTopicInput, setManualTopicInput] = useState<string>("");
+  const [analysisTone, setAnalysisTone] = useState<string>("설명 중심");
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -162,12 +169,15 @@ export default function FGIAnalysisPage() {
     }
   }, []);
 
+  // 전체 주제 배열 (추출 + 직접 입력)
+  const allTopics = [...guideTopics, ...manualTopics];
+
   useEffect(() => {
-    if (selectAllRef.current && guideTopics && guideTopics.length > 0) {
+    if (selectAllRef.current && allTopics && allTopics.length > 0) {
       selectAllRef.current.indeterminate =
-        selectedTopics.length > 0 && selectedTopics.length < guideTopics.length;
+        selectedTopics.length > 0 && selectedTopics.length < allTopics.length;
     }
-  }, [selectedTopics, guideTopics]);
+  }, [selectedTopics, allTopics]);
 
   const logProgress = (msg: string) => {
     const timestamp = new Date().toISOString();
@@ -670,12 +680,11 @@ export default function FGIAnalysisPage() {
   }
 
   // 주제별 분석 실행 핸들러
-  async function handleTopicAnalysis() {
+  const handleTopicAnalysis = async () => {
     if (!fgiDocumentId || selectedTopics.length === 0) {
       alert('FGI 문서와 분석할 주제를 선택해주세요.');
       return;
     }
-    
     setTopicResults([]);
     const formData = new FormData();
     formData.append('file_id', fgiDocumentId);
@@ -683,7 +692,7 @@ export default function FGIAnalysisPage() {
     if (user?.id) {
       formData.append('user_id', user.id);
     }
-    
+    formData.append('analysis_tone', analysisTone);
     try {
       const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
       const res = await fetch(`${baseUrl}/api/fgi-topic-analysis`, { 
@@ -702,7 +711,7 @@ export default function FGIAnalysisPage() {
       console.error('주제별 분석 오류:', error);
       alert(error instanceof Error ? error.message : '주제별 분석 중 오류가 발생했습니다.');
     }
-  }
+  };
 
   // 주제 체크박스 토글 핸들러
   function handleTopicCheckbox(topic: string) {
@@ -821,65 +830,178 @@ export default function FGIAnalysisPage() {
                 <CardTitle className="flex items-center">
                   <FileText className="mr-2 h-5 w-5" />
                   FGI 문서 파일 업로드 (필수)
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div
                   {...getFgiDocRootProps()}
-                  className={`mt-2 border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${
+                className={`mt-2 border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${
                     isFgiDocDragActive
-                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-900'
-                      : 'border-gray-300 hover:border-gray-400 dark:border-gray-600'
-                  }`}
-                >
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900'
+                    : 'border-gray-300 hover:border-gray-400 dark:border-gray-600'
+                }`}
+              >
                   <input {...getFgiDocInputProps()} />
                   <FileText className="mx-auto h-8 w-8 text-gray-400 mb-2" />
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                <p className="text-sm text-gray-600 dark:text-gray-300">
                     {isFgiDocDragActive ? TEXT.drag_drop[lang] : TEXT.doc_formats[lang]}
-                  </p>
-                </div>
+                </p>
+              </div>
                 {fgiDocumentFile && (
-                  <div className="p-3 bg-green-50 border border-green-200 rounded-lg dark:bg-green-900 dark:border-green-700">
-                    <div className="flex items-center">
-                      <CheckCircle className="h-4 w-4 text-green-600 mr-2" />
-                      <span className="text-sm text-green-800 dark:text-green-200">
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg dark:bg-green-900 dark:border-green-700">
+                  <div className="flex items-center">
+                    <CheckCircle className="h-4 w-4 text-green-600 mr-2" />
+                    <span className="text-sm text-green-800 dark:text-green-200">
                         FGI 문서 파일 업로드됨: {fgiDocumentFile.name}
-                      </span>
-                    </div>
+                    </span>
                   </div>
-                )}
+                </div>
+              )}
                 {fgiDocumentLoading && (
                   <div className="text-sm text-gray-500 mt-2">FGI 문서 임베딩 중...</div>
                 )}
-              </CardContent>
-            </Card>
+            </CardContent>
+          </Card>
             {/* 가이드라인 파일 업로드 UI (topic-analysis) */}
-            <Card className="mb-6">
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <FileText className="mr-2 h-5 w-5" />
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <FileText className="mr-2 h-5 w-5" />
                   가이드라인 파일 업로드 (선택)
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
                 <RagDropzone onFile={handleGuideUpload} lang={lang} />
+                {guideFile && guideFile.name && (
+                  <div className="p-3 bg-green-50 border border-green-200 rounded-lg dark:bg-green-900 dark:border-green-700 mt-2">
+                  <div className="flex items-center">
+                    <CheckCircle className="h-4 w-4 text-green-600 mr-2" />
+                    <span className="text-sm text-green-800 dark:text-green-200">
+                        가이드라인 파일 업로드됨: {guideFile.name}
+                    </span>
+                  </div>
+                </div>
+              )}
                 {guideLoading && <div className="text-sm text-gray-500 mt-2">가이드라인에서 주제 추출 중...</div>}
                 {guideError && <div className="text-sm text-red-500 mt-2">{guideError}</div>}
-                <Button className="mt-4 w-full" disabled={selectedTopics.length === 0 || !fgiDocumentId || isProcessing} onClick={handleTopicAnalysis}>주제별 분석 실행</Button>
-              </CardContent>
-            </Card>
+            </CardContent>
+          </Card>
           </>
         )}
       </aside>
-      <div
-        style={{ width: 8, cursor: 'col-resize', zIndex: 30, userSelect: 'none' }}
-        className="flex-shrink-0 h-screen bg-transparent hover:bg-orange-100 dark:hover:bg-orange-900 transition-colors"
-        onMouseDown={e => { console.log('Drag start'); handleDrag(e); }}
-        role="separator"
-        aria-orientation="vertical"
-        tabIndex={-1}
-      />
       <main className="flex-1 flex flex-col px-12 py-10 min-h-screen dark:bg-gray-900 dark:text-gray-100">
+        {analysisMode === "topic-analysis" && guideTopics.length > 0 && (
+          <>
+            <div className="w-full max-w-3xl mx-auto flex flex-col gap-6">
+              {/* 주제 선택 카드 */}
+              <Card className="mb-4 w-full shadow-lg border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-white dark:from-gray-900 dark:to-gray-800">
+                <CardHeader>
+                  <CardTitle className="text-2xl font-bold text-blue-800 dark:text-blue-200 flex items-center gap-2">
+                    <FileText className="w-6 h-6 text-blue-500" /> 추출된 주제 선택
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="py-6 px-8">
+                  <div className="flex flex-col gap-4">
+                    {/* 분석 분위기 선택 라디오 그룹 */}
+                    <div className="flex flex-row gap-6 items-center mb-2">
+                      <span className="font-semibold text-blue-700 dark:text-blue-200">분석 분위기:</span>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="analysisTone" value="설명 중심" checked={analysisTone === "설명 중심"} onChange={() => setAnalysisTone("설명 중심")} className="accent-blue-500" />
+                        <span>설명 중심</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="analysisTone" value="키워드 중심" checked={analysisTone === "키워드 중심"} onChange={() => setAnalysisTone("키워드 중심")} className="accent-blue-500" />
+                        <span>키워드 중심</span>
+                      </label>
+                    </div>
+                    {/* 선택된 분위기 설명 */}
+                    <div className="mb-4 text-sm text-blue-500 dark:text-blue-300 min-h-[1.5em]">{TONE_DESCRIPTIONS[analysisTone]}</div>
+                    <div className="flex flex-wrap items-center gap-4 mb-2">
+                      <label className="font-medium flex items-center gap-2 text-blue-700 dark:text-blue-200 bg-blue-100 dark:bg-blue-900 px-3 py-1 rounded shadow-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          ref={selectAllRef}
+                          checked={selectedTopics.length === allTopics.length && allTopics.length > 0}
+                          onChange={e => setSelectedTopics(e.target.checked ? allTopics : [])}
+                          className="accent-blue-500 w-5 h-5"
+                        />
+                        전체 선택
+                      </label>
+                      <span className="text-sm text-gray-400">({selectedTopics.length} / {allTopics.length} 선택됨)</span>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {allTopics.map((topic, idx) => {
+                        // 정규표현식으로 앞 숫자/기호 제거 (guideTopics만 적용, manualTopics는 그대로)
+                        const isManual = idx >= guideTopics.length;
+                        const cleanTopic = isManual ? topic : topic.replace(/^\s*[\d]+[.)\-:•▷]?\s*/, '');
+                        return (
+                          <label key={idx} className={`flex items-center gap-2 px-3 py-2 rounded-lg shadow-sm border border-blue-100 dark:border-blue-800 bg-white dark:bg-gray-900 hover:bg-blue-50 dark:hover:bg-blue-800 transition cursor-pointer ${selectedTopics.includes(topic) ? 'ring-2 ring-blue-400' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={selectedTopics.includes(topic)}
+                              onChange={() => handleTopicCheckbox(topic)}
+                              className="accent-blue-500 w-5 h-5"
+                            />
+                            <span className="font-bold text-blue-700 dark:text-blue-200 mr-1">{idx + 1}.</span>
+                            <span className="truncate font-medium text-blue-900 dark:text-blue-100">{cleanTopic}</span>
+                            {isManual && (
+                              <button onClick={e => { e.stopPropagation(); setManualTopics(prev => prev.filter((_, i) => i !== (idx - guideTopics.length))); setSelectedTopics(prev => prev.filter(t => t !== topic)); }} className="ml-2 text-blue-600 hover:text-red-500 font-bold text-lg" title="삭제">×</button>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+              {/* 직접 주제 입력 (input) */}
+              <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center w-full">
+                <input
+                  type="text"
+                  className="border-2 border-blue-200 dark:border-blue-700 rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-blue-900 dark:bg-gray-800 text-blue-100 shadow-sm"
+                  placeholder="직접 주제 입력 후 Enter"
+                  value={manualTopicInput}
+                  onChange={e => setManualTopicInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.nativeEvent.isComposing) return;
+                    if (e.key === 'Enter' && manualTopicInput.trim()) {
+                      setManualTopics(prev => [...prev, manualTopicInput.trim()]);
+                      setManualTopicInput("");
+                    }
+                  }}
+                />
+              </div>
+              {/* 주제별 분석 실행 버튼 */}
+              <div className="w-full flex">
+                <Button
+                  className="w-full h-14 text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-lg transition"
+                  disabled={selectedTopics.length === 0 || !fgiDocumentId || isProcessing}
+                  onClick={handleTopicAnalysis}
+                >
+                  {isProcessing ? '분석 중...' : '주제별 분석 실행'}
+                </Button>
+              </div>
+              {/* 주제별 분석 결과 */}
+              {analysisMode === "topic-analysis" && topicResults.length > 0 && (
+                <Card className="w-full mb-8">
+                  <CardHeader>
+                    <CardTitle>주제별 분석 결과</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {topicResults.map((tr, idx) => (
+                        <div key={idx} className="bg-gray-50 p-4 rounded-lg border dark:bg-gray-800">
+                          <div className="font-semibold mb-1">{idx + 1}. {tr.topic}</div>
+                          <div className="text-sm whitespace-pre-line">{tr.result}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          </>
+        )}
         {analysisMode === 'doc-rag' && ragFileId && (
           <div className="w-full h-full flex flex-col" style={{ minHeight: '70vh' }}>
             <Card className="flex-1 flex flex-col h-full mb-6 w-full">
@@ -1094,23 +1216,6 @@ export default function FGIAnalysisPage() {
                 </div>
               )}
 
-            </CardContent>
-          </Card>
-        )}
-        {analysisMode === "topic-analysis" && topicResults.length > 0 && (
-          <Card className="w-full max-w-2xl mb-8">
-            <CardHeader>
-              <CardTitle>주제별 분석 결과</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {topicResults.map((tr, idx) => (
-                  <div key={idx} className="bg-gray-50 p-4 rounded-lg border dark:bg-gray-800">
-                    <div className="font-semibold mb-1">{tr.topic}</div>
-                    <div className="text-sm whitespace-pre-line">{tr.result}</div>
-                  </div>
-                ))}
-              </div>
             </CardContent>
           </Card>
         )}

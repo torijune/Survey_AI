@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
 import base64
+from collections import defaultdict
 
 load_dotenv()
 
@@ -66,151 +67,87 @@ class VisualizationWorkflow:
         except Exception as e:
             raise Exception(f"OpenAI API 호출 실패: {str(e)}")
     
-    async def load_survey_tables(self, file_content: bytes, file_name: str, sheet_name: str = "통계표") -> SurveyData:
+    async def load_survey_tables(self, file_content: bytes, file_name: str, sheet_name: str = "통계표"):
         """설문 테이블 로드"""
         try:
-            # Excel 파일 읽기
-            workbook = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
-            
-            # 시트 선택
-            worksheet = workbook[sheet_name] if sheet_name in workbook.sheetnames else workbook.active
-            
-            # 데이터 추출
-            data = []
-            for row in worksheet.iter_rows(values_only=True):
-                data.append(row)
-            
-            # 질문 인덱스 찾기
-            question_indices = []
-            patterns = [
-                r'^[A-Z]+\d*[-.]?\d*\.',  # A1., B2., A1-1. 등
-                r'^[A-Z]+\d*$',           # A1, B2 등 (점 없음)
-                r'^[A-Z]+\d*[-.]?\d*$',   # A1-1, B2-1 등 (점 없음)
-                r'^Q\d+',                 # Q1, Q2 등
-                r'^질문\s*\d+',           # 질문 1, 질문 2 등
-            ]
-            
-            for i, row in enumerate(data):
-                if row and row[0]:
-                    cell_value = str(row[0])
-                    for pattern in patterns:
-                        if re.match(pattern, cell_value):
-                            question_indices.append(i)
-                            break
-            
-            # 질문을 찾지 못한 경우 대체 방법
-            if not question_indices:
-                for i in range(1, min(len(data), 20)):
-                    if data[i] and data[i][0] and len(str(data[i][0])) > 5:
-                        cell_value = str(data[i][0])
-                        if not any(keyword in cell_value for keyword in ['대분류', '소분류']):
-                            question_indices.append(i)
-                            break
-            
-            # 테이블 파싱
+            df = pd.read_excel(io.BytesIO(file_content), sheet_name=sheet_name, header=None)
+
+            pattern = r"^[A-Z]+\d*[-.]?\d*\."
+            question_indices = df[df[0].astype(str).str.match(pattern)].index.tolist()
+
             tables = {}
             question_texts = {}
             question_keys = []
-            key_counts = {}
-            
-            for i, idx in enumerate(question_indices):
-                if idx + 1 < len(data):
-                    # 질문 텍스트
-                    question_text = str(data[idx][0]) if data[idx] and data[idx][0] else f"Question_{i+1}"
-                    question_key = f"Q{i+1}"
-                    
-                    # 테이블 데이터
-                    table_data = []
-                    for j in range(idx + 1, len(data)):
-                        if data[j] and any(data[j]):  # 빈 행이 아닌 경우
-                            table_data.append(data[j])
-                        elif j > idx + 1 and not any(data[j]):  # 연속된 빈 행
-                            break
-                    
-                    if table_data:
-                        # 컬럼 생성
-                        columns = []
-                        if table_data:
-                            # 첫 번째 행을 헤더로 사용
-                            header_row = table_data[0]
-                            for col_idx, cell in enumerate(header_row):
-                                if col_idx == 0:
-                                    columns.append("대분류")
-                                elif col_idx == 1:
-                                    columns.append("소분류")
-                                elif col_idx == 2:
-                                    columns.append("사례수")
-                                else:
-                                    col_name = str(cell).strip() if cell else f"Column_{col_idx}"
-                                    columns.append(col_name)
-                        
-                        # 데이터 처리
-                        processed_data = []
-                        for row in table_data[1:]:
-                            processed_row = []
-                            for cell in row:
-                                if cell is None or cell == '' or (isinstance(cell, float) and np.isnan(cell)):
-                                    processed_row.append('')
-                                else:
-                                    processed_row.append(str(cell))
-                            processed_data.append(processed_row)
-                        
-                        # 빈 열 제거
-                        if processed_data and columns:
-                            valid_columns = []
-                            valid_data = []
-                            
-                            for col_idx, col_name in enumerate(columns):
-                                has_value = False
-                                for row in processed_data:
-                                    if col_idx < len(row) and row[col_idx] and row[col_idx].strip():
-                                        has_value = True
-                                        break
-                                
-                                if has_value:
-                                    valid_columns.append(col_name)
-                                    col_data = []
-                                    for row in processed_data:
-                                        col_data.append(row[col_idx] if col_idx < len(row) else '')
-                                    valid_data.append(col_data)
-                            
-                            # 데이터를 행 단위로 변환
-                            if valid_data:
-                                final_data = []
-                                for row_idx in range(len(valid_data[0])):
-                                    row = []
-                                    for col_idx in range(len(valid_data)):
-                                        row.append(valid_data[col_idx][row_idx])
-                                    final_data.append(row)
-                                
-                                # 빈 행 제거
-                                final_data = [row for row in final_data if any(cell.strip() for cell in row)]
-                                
-                                if final_data:
-                                    # 대분류 forward fill
-                                    last_category = ''
-                                    for row in final_data:
-                                        if row[0] and row[0].strip():
-                                            last_category = row[0]
-                                        else:
-                                            row[0] = last_category
-                                    
-                                    # 요약 행 제거
-                                    if len(final_data) > 2:
-                                        final_data = final_data[:-1]
-                                    
-                                    table = SurveyTable(
-                                        data=final_data,
-                                        columns=valid_columns,
-                                        question_text=question_text,
-                                        question_key=question_key
-                                    )
-                                    
-                                    tables[question_key] = table
-                                    question_texts[question_key] = question_text
-                                    question_keys.append(question_key)
-            
-            return SurveyData(tables, question_texts, question_keys)
+            key_counts = defaultdict(int)
+
+            for i, start in enumerate(question_indices):
+                end = question_indices[i + 1] if i + 1 < len(question_indices) else len(df)
+                title = str(df.iloc[start, 0]).strip()
+
+                match = re.match(pattern, title)
+                if not match:
+                    continue
+                base_key = match.group().rstrip(".")
+                key_counts[base_key] += 1
+                suffix = f"_{key_counts[base_key]}" if key_counts[base_key] > 1 else ""
+                final_key = base_key + suffix
+                final_key_norm = self.normalize_key(final_key)
+
+                question_texts[final_key_norm] = title + "(전체 단위 : %)"
+                question_keys.append(final_key_norm)
+
+                table = df.iloc[start + 1:end].reset_index(drop=True)
+
+                if len(table) >= 2:
+                    first_header = table.iloc[0].fillna('').astype(str)
+                    second_header = table.iloc[1].fillna('').astype(str)
+
+                    title_text = None
+                    title_col_idx = None
+                    for idx, val in enumerate(first_header):
+                        if idx > 2 and isinstance(val, str) and len(val) > 0:
+                            if val not in ['관심없다', '보통', '관심있다', '평균']:
+                                title_text = val
+                                title_col_idx = idx
+                                break
+
+                    new_columns = []
+                    for idx in range(len(first_header)):
+                        if idx == 0:
+                            new_columns.append("대분류")
+                        elif idx == 1:
+                            new_columns.append("소분류")
+                        elif idx == 2:
+                            new_columns.append("사례수")
+                        else:
+                            first_val = "" if (title_col_idx is not None and first_header.iloc[idx] == title_text) else first_header.iloc[idx]
+                            combined = (first_val + " " + second_header.iloc[idx]).strip().replace('nan', '').strip()
+                            new_columns.append(combined)
+
+                    table = table.drop([0, 1]).reset_index(drop=True)
+                    table.columns = new_columns
+                    table = table.dropna(axis=1, how='all')
+                    table = table.dropna(axis=0, how='all')
+                    table["대분류"] = table["대분류"].ffill()
+                    table = table.dropna(subset=["대분류", "사례수"], how="all").reset_index(drop=True)
+                    if len(table) > 2:
+                        table = table.iloc[:-1].reset_index(drop=True)
+
+                    for col in table.columns:
+                        try:
+                            numeric_col = pd.to_numeric(table[col], errors='coerce')
+                            if numeric_col.notna().any():
+                                table[col] = numeric_col.round(1)
+                        except:
+                            continue
+
+                    tables[final_key_norm] = table
+
+            return {
+                "tables": tables,
+                "question_texts": question_texts,
+                "question_keys": question_keys
+            }
             
         except Exception as e:
             raise Exception(f"설문 테이블 로드 실패: {str(e)}")
@@ -342,18 +279,18 @@ class VisualizationWorkflow:
             
             results = {}
             
-            if selected_key and selected_key in survey_data.tables:
+            if selected_key and selected_key in survey_data["tables"]:
                 # 특정 테이블만 분석
                 if on_step:
                     on_step(f"선택된 테이블 분석 중: {selected_key}")
                 
-                table = survey_data.tables[selected_key]
+                table = survey_data["tables"][selected_key]
                 result = await self.analyze_table(table)
                 results[selected_key] = result
                 
             else:
                 # 모든 테이블 분석
-                for key, table in survey_data.tables.items():
+                for key, table in survey_data["tables"].items():
                     if on_step:
                         on_step(f"테이블 분석 중: {key}")
                     
@@ -364,8 +301,8 @@ class VisualizationWorkflow:
                 "success": True,
                 "results": results,
                 "survey_data": {
-                    "question_keys": survey_data.question_keys,
-                    "question_texts": survey_data.question_texts
+                    "question_keys": survey_data["question_keys"],
+                    "question_texts": survey_data["question_texts"]
                 }
             }
             

@@ -108,6 +108,7 @@ export default function DashboardPage() {
   const [analyses, setAnalyses] = useState<SurveyAnalysis[]>([]);
   const [visualizations, setVisualizations] = useState<SurveyVisualization[]>([]);
   const [fgiAnalyses, setFgiAnalyses] = useState<FGIAnalysis[]>([]);
+  const [fgiTopicAnalyses, setFgiTopicAnalyses] = useState<any[]>([]);
   const [ragSessions, setRagSessions] = useState<any[]>([]);
   const [favorites, setFavorites] = useState<any[]>([]);
   const [copySuccessQA, setCopySuccessQA] = useState<string | null>(null);
@@ -167,6 +168,16 @@ export default function DashboardPage() {
       if (fgiAnalysesResponse.ok) {
         const fgiAnalysesData = await fgiAnalysesResponse.json();
         setFgiAnalyses(fgiAnalysesData.data || []);
+      }
+
+      // FGI 주제별 분석 로드
+      const fgiTopicAnalysesResponse = await supabase
+        .from('fgi_topic_analyses')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (!fgiTopicAnalysesResponse.error && fgiTopicAnalysesResponse.data) {
+        setFgiTopicAnalyses(fgiTopicAnalysesResponse.data);
       }
     } catch (error) {
       console.error('데이터 로드 오류:', error);
@@ -484,7 +495,7 @@ export default function DashboardPage() {
       </div>
 
       <Tabs defaultValue="plans" className="w-full">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="plans" className="flex items-center gap-2">
             <FileText className="h-4 w-4" />
             {TEXT.plans[lang]} ({plans.length})
@@ -501,7 +512,11 @@ export default function DashboardPage() {
             <Users className="h-4 w-4" />
             FGI 분석 ({fgiAnalyses.length})
           </TabsTrigger>
-          <TabsTrigger value="favorites">내가 저장한 Q&A</TabsTrigger>
+          <TabsTrigger value="fgi-topic-analyses" className="flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            FGI 주제별 분석 ({fgiTopicAnalyses.length})
+          </TabsTrigger>
+          <TabsTrigger value="favorites">FGI 질의 응답</TabsTrigger>
         </TabsList>
 
         <TabsContent value="plans" className="mt-6">
@@ -832,29 +847,129 @@ export default function DashboardPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="favorites">
-          <div className="mb-8">
-            <h2 className="text-xl font-bold mb-4">내가 저장한 Q&A</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {favorites.length === 0 && <div className="text-gray-500">저장된 Q&A가 없습니다.</div>}
-              {favorites.map((fav) => (
-                <Card key={fav.id} className="relative">
+        <TabsContent value="fgi-topic-analyses" className="mt-6">
+          {fgiTopicAnalyses.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <p className="text-gray-500">주제별 분석 결과가 없습니다.</p>
+                <Link href="/FGI-analysis">
+                  <Button className="mt-4">첫 번째 주제별 분석하기</Button>
+                </Link>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {fgiTopicAnalyses.map((item) => (
+                <Card key={item.id} className="hover:shadow-lg transition-shadow">
                   <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <span className="font-bold">{fav.title}</span>
-                      <span className="text-xs text-gray-400">({fav.file_name})</span>
+                    <CardTitle className="text-lg flex items-center justify-between">
+                      <span className="truncate">{item.guide_file_name || item.fgi_file_id}</span>
+                      <span className="text-xs text-blue-600 ml-2">{item.analysis_tone}</span>
                     </CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="text-xs text-gray-500 mb-1">{fav.description}</div>
-                    <div className="text-sm font-semibold mb-1">Q: {fav.question}</div>
-                    <div className="text-sm mb-2">A: {fav.answer}</div>
-                    <div className="text-xs text-gray-400 mb-2">{new Date(fav.created_at).toLocaleString()}</div>
-                    <button title="복사" onClick={() => handleCopyFavoriteQA(fav.question, fav.answer)} className="p-1 rounded hover:bg-blue-100"><Copy className="w-4 h-4 text-blue-500" /></button>
-                    {copySuccessQA === fav.question && <span className="text-xs text-green-600 ml-1">복사됨!</span>}
+                  <CardContent className="space-y-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">주제 개수</p>
+                      <p className="text-sm text-gray-800">{Array.isArray(item.topics) ? item.topics.length : 0}개</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">주제 목록</p>
+                      <p className="text-xs text-gray-800 line-clamp-2">{Array.isArray(item.topics) ? item.topics.join(', ') : ''}</p>
+                    </div>
+                    <div className="flex items-center text-xs text-gray-500">
+                      <Calendar className="h-3 w-3 mr-1" />
+                      {formatDate(item.created_at)}
+                    </div>
+                    <div className="flex gap-2">
+                      <Link href={`/dashboard/fgi-topic-analyses/${item.id}`}>
+                        <Button size="sm" variant="outline" className="flex-1">
+                          <Eye className="h-3 w-3 mr-1" />
+                          상세 보기
+                        </Button>
+                      </Link>
+                    </div>
                   </CardContent>
                 </Card>
               ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="favorites">
+          <div className="mb-8">
+            <h2 className="text-xl font-bold mb-4">FGI 질의 응답</h2>
+            {/* RAG 대화 세션 카드 */}
+            <div className="mb-6">
+              <h3 className="text-lg font-semibold mb-2">FGI RAG 대화 세션</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {ragSessions.length === 0 && <div className="text-gray-500">대화 세션이 없습니다.</div>}
+                {ragSessions.map((session) => (
+                  <Card key={session.chat_group_id} className="cursor-pointer hover:shadow-lg transition">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <FileText className="h-5 w-5" /> 세션: {session.chat_group_id.slice(0, 8)}...<br/>
+                        <span className="text-xs text-gray-400">파일: {session.file_id}</span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-xs text-gray-500 mb-2">생성: {new Date(session.created_at).toLocaleString()}</div>
+                      <div className="text-xs text-gray-500 mb-2">최근: {new Date(session.last_updated).toLocaleString()}</div>
+                      <div className="text-sm text-gray-800 truncate">{session.last_role === 'user' ? '🙋‍♂️' : '🤖'} {session.last_message}</div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+            {/* 즐겨찾기 Q&A 카드 */}
+            <div>
+              <h3 className="text-lg font-semibold mb-2">내가 저장한 Q&A</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[70vh] overflow-y-auto p-2 bg-white rounded-lg shadow-inner">
+                {favorites.length === 0 && <div className="text-gray-500">저장된 Q&A가 없습니다.</div>}
+                {favorites.map((fav, idx) => (
+                  <Card key={fav.id || idx} className="mb-2">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        {fav.title || 'Q&A'}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={async () => {
+                            if (!confirm('정말 삭제하시겠습니까?')) return;
+                            const { error } = await supabase
+                              .from('fgi_rag_favorites')
+                              .delete()
+                              .eq('id', fav.id);
+                            if (!error) {
+                              setFavorites(favorites.filter(f => f.id !== fav.id));
+                            } else {
+                              alert('삭제에 실패했습니다.');
+                            }
+                          }}
+                          className="text-red-600 hover:text-red-800 ml-auto"
+                          title="삭제"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-xs text-gray-500 mb-1">{fav.description}</div>
+                      <div className="text-sm font-semibold mb-1 truncate">Q: {fav.question}</div>
+                      <div className="text-sm mb-2 truncate">A: {fav.answer?.slice(0, 80)}{fav.answer && fav.answer.length > 80 ? '...' : ''}</div>
+                      <div className="text-xs text-gray-400 mb-2">{new Date(fav.created_at).toLocaleString()}</div>
+                      <div className="flex gap-2 items-center">
+                        <button title="복사" onClick={() => handleCopyFavoriteQA(fav.question, fav.answer)} className="p-1 rounded hover:bg-blue-100"><Copy className="w-4 h-4 text-blue-500" /></button>
+                        {copySuccessQA === fav.question && <span className="text-xs text-green-600 ml-1">복사됨!</span>}
+                        <Link href={`/dashboard/favorites/${fav.id}`} className="flex-1">
+                          <Button size="sm" variant="outline" className="w-full flex items-center justify-center">
+                            <Eye className="h-3 w-3 mr-1" /> 상세 보기
+                          </Button>
+                        </Link>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             </div>
           </div>
         </TabsContent>

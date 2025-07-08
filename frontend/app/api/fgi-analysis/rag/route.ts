@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ error: e.message || 'RAG 질의응답 오류' }, { status: 500 });
   }
-}
+} 
 
 export async function GET(req: NextRequest) {
   try {

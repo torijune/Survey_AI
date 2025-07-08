@@ -120,8 +120,8 @@ export default function TableAnalysisPage() {
       const formData = new FormData();
       formData.append("file", file);
       
-      const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const response = await fetch(`${baseUrl}/api/survey-parsing`, {
+      // Next.js API 라우트로 프록시 (백엔드로 중계)
+      const response = await fetch("/api/table-analysis", {
         method: "POST",
         body: formData,
       });
@@ -131,19 +131,24 @@ export default function TableAnalysisPage() {
       }
 
       const data = await response.json();
-      setSurveyData(data);
+      setSurveyData({
+        questionKeys: data.question_keys,
+        questionTexts: data.question_texts,
+        tables: data.tables,
+        recommendations: data.recommendations
+      });
       
       console.log("🔍 Debug: Survey data loaded:", {
-        questionKeys: data.questionKeys,
-        questionTexts: data.questionTexts,
+        questionKeys: data.question_keys,
+        questionTexts: data.question_texts,
         tables: Object.keys(data.tables)
       });
       
-      if (data.questionKeys.length > 0) {
-        setSelectedQuestion(data.questionKeys[0]);
+      if (data.question_keys.length > 0) {
+        setSelectedQuestion(data.question_keys[0]);
         // Initialize analysis plan with rule-based recommendation
         const initialPlan: AnalysisPlan = {};
-        data.questionKeys.forEach((key: string) => {
+        data.question_keys.forEach((key: string) => {
           const table = data.tables[key];
           // Python 백엔드에서 추천된 분석 방법 사용
           const recommended = data.recommendations?.[key] || "manual";
@@ -215,31 +220,60 @@ export default function TableAnalysisPage() {
     setWorkflowState(null);
     setSingleWorkflowSteps([]);
     setShowWorkflowSteps(false);
+
     try {
-      // Python 백엔드 API 호출
-      const formData = new FormData();
-      // surveyData에서 파일 정보를 가져와야 함
-      // 현재 구조상 파일이 별도로 저장되어 있지 않으므로 
-      // 실제 파일 업로드 시점에 파일을 저장해야 함
-      throw new Error("파일 업로드 구조를 수정해야 합니다.");
+      // 단일 분석
+      if (analysisType === "single") {
+        const formData = new FormData();
+        formData.append("file", rawDataFile!); // 업로드된 설문 파일
+        formData.append("selected_key", selectedQuestion);
 
-      const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const response = await fetch(`${baseUrl}/api/langgraph`, {
-        method: "POST",
-        body: formData,
-      });
+        const response = await fetch("/api/table-analysis", {
+          method: "POST",
+          body: formData,
+        });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`LangGraph API 호출 실패: ${errorText}`);
-      }
+        const result = await response.json();
+        if (result.success) {
+          setAnalysisResult(JSON.stringify(result.analysis, null, 2));
+        } else {
+          throw new Error(result.error || "분석 중 오류가 발생했습니다.");
+        }
+      } else if (analysisType === "batch") {
+        // 일괄 분석
+        const selectedKeys = Object.keys(analysisPlan).filter(
+          (key) => analysisPlan[key]?.do_analyze
+        );
+        if (selectedKeys.length === 0) {
+          setError("분석할 질문이 선택되지 않았습니다.");
+          setIsProcessing(false);
+          return;
+        }
+        let allResults: { [key: string]: string } = {};
+        for (let i = 0; i < selectedKeys.length; i++) {
+          const key = selectedKeys[i];
+          setWorkflowProgress(`분석 진행 중: ${i + 1} / ${selectedKeys.length}`);
+          const formData = new FormData();
+          formData.append("file", rawDataFile!);
+          formData.append("selected_key", key);
 
-      const result = await response.json();
-      if (result.success) {
-        setAnalysisResult(result.result.polishing_result || "");
-        setWorkflowState(result.result);
-      } else {
-        throw new Error(result.error || "분석 중 오류가 발생했습니다.");
+          const response = await fetch("/api/table-analysis", {
+            method: "POST",
+            body: formData,
+          });
+          const result = await response.json();
+          if (result.success) {
+            allResults[key] = JSON.stringify(result.analysis, null, 2);
+          } else {
+            allResults[key] = result.error || "분석 실패";
+          }
+        }
+        setWorkflowProgress("");
+        // 결과 합치기
+        const combinedResult = Object.entries(allResults)
+          .map(([k, v]) => `### [${k}]\n${v}`)
+          .join("\n\n---\n\n");
+        setAnalysisResult(combinedResult);
       }
     } catch (err: any) {
       setError(err?.message || String(err));
@@ -428,6 +462,41 @@ export default function TableAnalysisPage() {
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
   };
+
+  // Table preview component
+  function TablePreview() {
+    if (!surveyData || !selectedQuestion || !surveyData.tables[selectedQuestion]) {
+      return null;
+    }
+    const table = surveyData.tables[selectedQuestion];
+    return (
+      <div style={{ margin: '24px 0' }}>
+        <div style={{ overflowX: 'auto', border: '1px solid #eee', borderRadius: 8 }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr>
+                {table.columns.map((col, idx) => (
+                  <th key={idx} style={{ padding: 8, background: '#f9f9f9', borderBottom: '1px solid #ddd', fontWeight: 500 }}>{col}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {table.data.slice(0, 10).map((row, rIdx) => (
+                <tr key={rIdx}>
+                  {row.map((cell, cIdx) => (
+                    <td key={cIdx} style={{ padding: 8, borderBottom: '1px solid #eee', textAlign: 'center', fontSize: 14 }}>{cell === null || cell === undefined ? '' : cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+          (최대 10개 행 미리보기)
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full min-h-screen bg-gray-50 flex flex-row dark:bg-gray-900 dark:text-gray-100">

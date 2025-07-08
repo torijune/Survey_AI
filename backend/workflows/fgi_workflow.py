@@ -211,7 +211,7 @@ class FGIWorkflow:
                 "주제 리스트 이외의 설명, 안내, 서론, 결론 등은 절대 포함하지 마."
                 "주제 리스트에 대해서만 출력하고 다른 내용은 절대 포함하지마.\n\n"
                 + full_text +
-                "\n예시: 1. 주제1\n2. 주제2\n3. 주제3\n4. 주제4\n5. 주제5\n6. ...\n\n"
+                "\n예시: 주제1\n 주제2\n 주제3\n 주제4\n 주제5\n  ...\n\n"
                 "Let's think step by step."
             )
             messages = [
@@ -231,7 +231,8 @@ class FGIWorkflow:
                     and not any(s in line for s in filter_phrases)
                     and (re.match(r'^([0-9]+[.)]|[0-9]+:|▷|-|•)', line.strip()) or len(line.strip()) > 5)
                 ]
-                topics = [t for t in topics if len(t) > 2]
+                # 앞 숫자/기호 제거
+                topics = [re.sub(r'^\s*[\d]+[.)\-:•▷]?\s*', '', t) for t in topics if len(t) > 2]
                 if topics:
                     print(f"[FGI][LLM] 추출된 주제 {len(topics)}개:")
                     for i, t in enumerate(topics):

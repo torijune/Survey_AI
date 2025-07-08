@@ -157,77 +157,6 @@ async def openai_call(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# table-analysis page statistical-tests logic
-@app.post("/api/statistical-tests")
-async def statistical_tests(
-    test_type: str = Form(...),
-    file: UploadFile = File(...),
-    question_key: str = Form(...)
-):
-    """통계 검정 실행"""
-    try:
-        # 파일 읽기
-        file_content = await file.read()
-        
-        # 데이터 처리
-        df = data_processor.process_excel_file(file_content)
-        
-        # 통계 검정 실행
-        results = await data_processor.run_statistical_tests(
-            test_type=test_type,
-            df=df,
-            question_key=question_key
-        )
-        
-        return {"success": True, "results": results}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# table-analysis page logic
-@app.post("/api/table-analysis")
-async def table_analysis(
-    file: UploadFile = File(...),
-    analysis_type: str = Form("manual"),
-    selected_key: str = Form("")
-):
-    """테이블 분석"""
-    try:
-        # 파일 읽기
-        file_content = await file.read()
-        
-        # 데이터 처리
-        tables = data_processor.extract_tables_from_excel(file_content)
-        
-        # 개별 table 분석
-        if analysis_type == "manual" and selected_key:
-            # 특정 테이블 분석
-            if selected_key in tables:
-                table_data = tables[selected_key]
-                analysis = await data_processor.analyze_table(table_data)
-                return {
-                    "success": True,
-                    "analysis": analysis,
-                    "selected_key": selected_key
-                }
-            else:
-                raise HTTPException(status_code=400, detail=f"선택된 키 '{selected_key}'를 찾을 수 없습니다.")
-        # 전체 table 분석
-        else:
-            # 모든 테이블 분석
-            all_analyses = {}
-            for key, table_data in tables.items():
-                analysis = await data_processor.analyze_table(table_data)
-                all_analyses[key] = analysis
-            
-            return {
-                "success": True,
-                "analyses": all_analyses
-            }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 # survey-planner page logic
 @app.post("/api/planner")
 async def planner_workflow_endpoint(
@@ -256,32 +185,57 @@ async def planner_workflow_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def clean_json(obj):
+    if isinstance(obj, float):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return obj
+    elif isinstance(obj, list):
+        return [clean_json(x) for x in obj]
+    elif isinstance(obj, dict):
+        return {k: clean_json(v) for k, v in obj.items()}
+    else:
+        return obj
+
 @app.post("/api/visualization")
 async def visualization_workflow_endpoint(
     file: UploadFile = File(...),
     selected_key: str = Form(""),
     user_id: Optional[str] = Form(None)
 ):
-    """시각화 워크플로우 실행"""
+    """시각화용 테이블 데이터만 반환 (프론트에서 시각화)"""
     try:
         # 파일 읽기
         file_content = await file.read()
-        
-        # 옵션 설정
-        options = {
-            "selected_key": selected_key,
-            "user_id": user_id
-        }
-        
-        # 워크플로우 실행
-        result = await visualization_workflow.execute(
-            file_content=file_content,
-            file_name=file.filename,
-            options=options
-        )
-        
-        return JSONResponse(content=result)
-        
+
+        # 테이블 파싱만 수행
+        survey_data = await visualization_workflow.load_survey_tables(file_content, file.filename)
+        tables = {}
+        for key in survey_data["question_keys"]:
+            table = survey_data["tables"][key]
+            # If table is a DataFrame, convert to dict
+            if hasattr(table, "to_dict"):
+                columns = list(table.columns)
+                data = table.replace([np.inf, -np.inf], np.nan).fillna(np.nan).values.tolist()
+                question_text = survey_data["question_texts"].get(key, "")
+                question_key = key
+            else:
+                columns = table.columns if hasattr(table, "columns") else []
+                data = table.data if hasattr(table, "data") else []
+                question_text = getattr(table, "question_text", "")
+                question_key = getattr(table, "question_key", key)
+            tables[key] = {
+                "columns": columns,
+                "data": clean_json(data),
+                "question_text": question_text,
+                "question_key": question_key
+            }
+        return clean_json({
+            "success": True,
+            "tables": tables,
+            "question_keys": survey_data["question_keys"],
+            "question_texts": survey_data["question_texts"]
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -309,11 +263,13 @@ async def guide_topics(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# fgi-analysis page topic-analysis logic
 @app.post("/api/fgi-topic-analysis")
 async def fgi_topic_analysis(
     file_id: str = Form(...),
     topics: str = Form(...),
-    user_id: str = Form(None)
+    user_id: str = Form(None),
+    analysis_tone: str = Form("설명 중심")
 ):
     if not supabase:
         raise HTTPException(status_code=500, detail="supabase-py 패키지가 설치되어 있지 않습니다. 'pip install supabase'로 설치하세요.")
@@ -333,13 +289,94 @@ async def fgi_topic_analysis(
             chunks = rpc_res.data if hasattr(rpc_res, 'data') else []
             top_chunks = [c["chunk_text"] for c in chunks]
             context = "\n---\n".join(top_chunks)
+
+            # 분석 분위기별 프롬프트 분기
+            ## 키워드별 분석 프롬프트
+            if analysis_tone == "키워드 중심":
+                user_prompt = f"""회의 내용:\n{context}\n\n질문: 회의에서 '{topic}'에 대해 논의된 주요 키워드, 참여자들이 제시한 핵심 주제, 의견을 간략하게 키워드/주제 위주로 정리해줘. 
+                아래의 출력 예시를 참고해서 출력해줘.
+                출력 예시: 
+                {topic}에 대한 주요 키워드 및 주제는 아래와 같습니다.
+                1. 키워드1: \n 1-1. 키워드1에 대한 간략한 설명
+                2. 키워드2: \n 2-1. 키워드2에 대한 간략한 설명
+                3. 키워드3: \n 3-1. 키워드3에 대한 간략한 설명
+                ...
+                \n\n답변:
+                """
+            ## 자연어 설명 중심 분석 프롬프트
+            else: 
+                user_prompt = f"회의 내용:\n{context}\n\n질문: 회의에서 '{topic}'에 대해 참여자들이 어떤 의견을 제시하고 논의했는지 자연어로 키워드 및 중심 주제들에 대해서 요약 및 설명해줘.\n\n답변:"
+
+            # 프롬프트 콘솔 출력
+            print(f"[LLM 프롬프트][{analysis_tone}] {topic}\n---\n{user_prompt}\n---")
+
             messages = [
                 {"role": "system", "content": "FGI 회의록 기반 전문가. context에 없는 내용은 모른다고 답해."},
-                {"role": "user", "content": f"context:\n{context}\n\n질문: {topic}\n\n답변:"}
+                {"role": "user", "content": user_prompt}
             ]
             answer = await fgi_workflow.make_openai_call(messages)
             results.append({"topic": topic, "result": answer})
+
+        # 결과 DB 저장
+        try:
+            if supabase:
+                supabase.table('fgi_topic_analyses').insert({
+                    "user_id": user_id,
+                    "fgi_file_id": file_id,
+                    "topics": topic_list,
+                    "results": results,
+                    "analysis_tone": analysis_tone
+                }).execute()
+        except Exception as db_e:
+            print(f"[DB][fgi_topic_analyses] 저장 실패: {db_e}")
         return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/table-analysis")
+async def table_analysis_parse_only(
+    file: UploadFile = File(...)
+):
+    """table-analysis 전용 파서로 테이블 파싱 결과 반환"""
+    try:
+        file_content = await file.read()
+        parsed = data_processor.load_survey_tables(file_content, file.filename)
+        # DataFrame -> list 변환
+        tables = {}
+        for key, df in parsed["tables"].items():
+            tables[key] = {
+                "columns": list(df.columns),
+                "data": df.replace([np.inf, -np.inf], np.nan).fillna(np.nan).values.tolist()
+            }
+        return {
+            "success": True,
+            "tables": tables,
+            "question_texts": parsed["question_texts"],
+            "question_keys": parsed["question_keys"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/table-analysis/analyze")
+async def analyze_table_analysis(
+    file: UploadFile = File(...),
+    selected_key: str = Form(...)
+):
+    try:
+        file_content = await file.read()
+        # LangGraphWorkflow로 분석 실행
+        options = {
+            "analysis_type": True,  # 단일분석
+            "selected_key": selected_key,
+            "lang": "한국어",
+            "user_id": None
+        }
+        result = await langgraph_workflow.execute(
+            file_content=file_content,
+            file_name=file.filename,
+            options=options
+        )
+        return JSONResponse(content=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
