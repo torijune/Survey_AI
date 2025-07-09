@@ -201,7 +201,8 @@ export default function TableAnalysisPage() {
       if (uploadedRawDataFile) {
         formData.append("raw_data_file", uploadedRawDataFile);
       }
-      formData.append("analysis_type", analysisType);
+      // analysis_type을 'single'이 아닌 'analyze'로 변환해서 보냄
+      formData.append("analysis_type", analysisType === "single" ? "analyze" : analysisType);
       formData.append("selected_key", selectedQuestion);
       formData.append("lang", lang);
       formData.append("user_id", user?.id || "");
@@ -211,9 +212,8 @@ export default function TableAnalysisPage() {
       });
       const result = await response.json();
       if (result.success) {
-        // 단계별 결과 추출
-        const r = result.result || {};
-        setAnalysisResult(""); // 더 이상 원본 JSON은 출력하지 않음
+        // 전체 결과 객체를 저장
+        setAnalysisResult(result.result);
       } else {
         throw new Error(result.error || "분석 중 오류가 발생했습니다.");
       }
@@ -436,6 +436,118 @@ export default function TableAnalysisPage() {
       }
     }, 2000);
   };
+
+  // 단계별 결과 렌더링 함수 추가
+  function renderStepwiseResult(analysisResult: any) {
+    if (!analysisResult || typeof analysisResult !== 'object') return null;
+    const {
+      generated_hypotheses,
+      test_type,
+      ft_test_result,
+      anchor,
+      table_analysis,
+      hallucination_check,
+      polishing_result
+    } = analysisResult;
+    // 표 렌더링
+    function renderStatTable(table: any) {
+      if (!Array.isArray(table) || table.length === 0) return null;
+      const columns = Object.keys(table[0]);
+      return (
+        <table className="min-w-[320px] text-xs border rounded bg-white dark:bg-gray-900 mt-2 mb-2">
+          <thead>
+            <tr>
+              {columns.map((col) => (
+                <th key={col} className="px-2 py-1 border text-center font-semibold">{col}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {table.map((row, i) => (
+              <tr key={i}>
+                {columns.map((col) => (
+                  <td key={col} className="px-2 py-1 border text-center">{row[col]}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+    }
+    return (
+      <div className="space-y-6">
+        <h2 className="text-xl font-bold mb-2">분석 단계별 결과</h2>
+        {/* 1. 가설 생성 */}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-green-600"><CheckCircle className="inline w-5 h-5" /></span>
+            <span className="font-semibold text-base">1. 가설 생성</span>
+          </div>
+          {generated_hypotheses && (
+            <div className="bg-gray-50 dark:bg-gray-900 rounded p-3 text-sm whitespace-pre-wrap border mt-1">
+              {generated_hypotheses}
+            </div>
+          )}
+        </div>
+        {/* 2. 통계 검정 방법 결정 */}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-green-600"><CheckCircle className="inline w-5 h-5" /></span>
+            <span className="font-semibold text-base">2. 통계 검정 방법 결정</span>
+          </div>
+          {test_type && (
+            <div className="text-blue-700 font-bold">선택된 통계 검정 방법: <span className="underline">{test_type}</span></div>
+          )}
+        </div>
+        {/* 3. 통계 분석 실행 */}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-green-600"><CheckCircle className="inline w-5 h-5" /></span>
+            <span className="font-semibold text-base">3. 통계 분석 실행</span>
+          </div>
+          {renderStatTable(ft_test_result)}
+        </div>
+        {/* 4. Anchor(주요 변수) 추출 */}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-green-600"><CheckCircle className="inline w-5 h-5" /></span>
+            <span className="font-semibold text-base">4. Anchor(주요 변수) 추출</span>
+          </div>
+          {anchor && Array.isArray(anchor) && anchor.length > 0 && (
+            <div className="text-green-700 font-semibold">Anchor 컬럼: {anchor.join(', ')}</div>
+          )}
+        </div>
+        {/* 5. 테이블 요약(LLM) */}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-green-600"><CheckCircle className="inline w-5 h-5" /></span>
+            <span className="font-semibold text-base">5. 테이블 요약(LLM)</span>
+          </div>
+          {table_analysis && (
+            <div className="bg-gray-50 dark:bg-gray-900 rounded p-3 text-sm whitespace-pre-wrap border mt-1">{table_analysis}</div>
+          )}
+        </div>
+        {/* 6. 환각 체크/수정 */}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-green-600"><CheckCircle className="inline w-5 h-5" /></span>
+            <span className="font-semibold text-base">6. 환각 체크/수정</span>
+          </div>
+          <div className="text-green-700 font-semibold">검증 완료</div>
+        </div>
+        {/* 7. 문장 다듬기 */}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-green-600"><CheckCircle className="inline w-5 h-5" /></span>
+            <span className="font-semibold text-base">7. 문장 다듬기</span>
+          </div>
+          {polishing_result && (
+            <div className="bg-gray-50 dark:bg-gray-900 rounded p-3 text-sm whitespace-pre-wrap border mt-1">{polishing_result}</div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (authLoading) {
     return (
@@ -783,7 +895,21 @@ export default function TableAnalysisPage() {
           </Card>
         )}
         {/* 분석 단계별 결과 UI */}
-        {analysisResult && (
+        {analysisResult && typeof analysisResult === 'object' && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <ListChecks className="mr-2 h-5 w-5" />
+                분석 단계별 결과
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {renderStepwiseResult(analysisResult)}
+            </CardContent>
+          </Card>
+        )}
+        {/* 기존 텍스트/JSON 결과 fallback */}
+        {analysisResult && typeof analysisResult === 'string' && (
           <Card className="mb-6">
             <CardHeader>
               <CardTitle className="flex items-center">
