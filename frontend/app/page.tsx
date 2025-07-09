@@ -281,7 +281,7 @@ export default function HomeDemo() {
                 <li>• {lang === "한국어" ? "설문 통계 자동 파싱" : "Automatic survey statistics parsing"}</li>
                 <li>• <b>F-test, t-test,</b> {lang === "한국어" ? "카이제곱 검정" : "Chi-square test"}</li>
                 <li>• {lang === "한국어" ? "개별 문항 분석" : "Individual question analysis"}</li>
-                <li>• {lang === "한국어" ? "결과 시각화 및 보고서" : "Result visualization and reports"}</li>
+                                <li>• {lang === "한국어" ? "결과 시각화 및 보고서" : "Result visualization and reports"}</li>
               </ul>
               <Link href="/table-analysis" className="mt-4 inline-block">
                 <Button variant="outline" size="sm">

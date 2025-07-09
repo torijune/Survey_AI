@@ -63,7 +63,7 @@ export default function Header() {
         </Link>
         {user && (
           <nav className="flex items-center gap-4">
-            <Link 
+                        <Link 
               href="/survey" 
               className="text-gray-600 hover:text-blue-600 transition-colors text-sm dark:text-gray-200 dark:hover:text-blue-400"
             >

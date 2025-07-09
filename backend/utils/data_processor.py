@@ -132,7 +132,18 @@ class DataProcessor:
         return stats
 
     def load_survey_tables(self, file_content: bytes, file_name: str, sheet_name: str = "통계표"):
-        df = pd.read_excel(io.BytesIO(file_content), sheet_name=sheet_name, header=None)
+        import pandas as pd
+        import io
+        try:
+            df = pd.read_excel(io.BytesIO(file_content), sheet_name=sheet_name, header=None)
+        except ValueError as e:
+            # "통계표" 시트가 없으면 첫 시트로 fallback
+            if "Worksheet named" in str(e):
+                xls = pd.ExcelFile(io.BytesIO(file_content))
+                first_sheet = xls.sheet_names[0]
+                df = pd.read_excel(xls, sheet_name=first_sheet, header=None)
+            else:
+                raise
 
         pattern = r"^[A-Z]+\d*[-.]?\d*\."
         question_indices = df[df[0].astype(str).str.match(pattern)].index.tolist()

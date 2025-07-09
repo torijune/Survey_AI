@@ -575,7 +575,7 @@ export default function DashboardPage() {
         <TabsContent value="analyses" className="mt-6">
           {analyses.length === 0 ? (
             <Card>
-              <CardContent className="p-8 text-center">
+                            <CardContent className="p-8 text-center">
                 <p className="text-gray-500">{TEXT.no_data[lang]}</p>
                 <Link href="/table-analysis">
                   <Button className="mt-4">첫 번째 설문 분석하기</Button>
