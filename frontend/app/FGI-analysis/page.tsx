@@ -124,7 +124,7 @@ export default function FGIAnalysisPage() {
   const [totalChunks, setTotalChunks] = useState<number>(0);
   const [currentChunk, setCurrentChunk] = useState<number>(0);
   const [jobId, setJobId] = useState<string | null>(null);
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const [progressType, setProgressType] = useState<'chunk' | 'final' | 'other'>('chunk');
   const [subjectSummary, setSubjectSummary] = useState<string | null>(null);
   const [subjectLoading, setSubjectLoading] = useState(false);
@@ -137,6 +137,15 @@ export default function FGIAnalysisPage() {
   const [docSummaryPreview, setDocSummaryPreview] = useState<string>("");
   const [docSummaryLoading, setDocSummaryLoading] = useState(false);
   const [ragChatGroupId, setRagChatGroupId] = useState<string | null>(null);
+  // 청킹 및 분석 진행상황 상태 추가
+  const [chunkProgress, setChunkProgress] = useState<{
+    total: number;
+    current: number;
+    completed: number;
+    summaries: Array<{chunk: number, summary: string, status: 'pending' | 'processing' | 'completed' | 'error'}>;
+  }>({total: 0, current: 0, completed: 0, summaries: []});
+  const [finalSummary, setFinalSummary] = useState<string>("");
+  const [analysisPhase, setAnalysisPhase] = useState<'idle' | 'chunking' | 'analyzing' | 'finalizing' | 'completed'>('idle');
   const [searchParams, setSearchParams] = useState<URLSearchParams | null>(null);
   const [saveQAModal, setSaveQAModal] = useState<{open: boolean, q: string, a: string} | null>(null);
   const [savingQA, setSavingQA] = useState(false);
@@ -253,6 +262,64 @@ export default function FGIAnalysisPage() {
         if (chunkMatch[2]) setTotalChunks(Number(chunkMatch[2]));
       }
     }
+    
+    // 청킹 진행상황 업데이트
+    updateChunkProgress(msg);
+  };
+  
+  // 청킹 진행상황 업데이트 함수
+  const updateChunkProgress = (msg: string) => {
+    // 총 청크 수 파싱
+    const totalMatch = msg.match(/총 (\d+)개 메가 청크 생성 완료/);
+    if (totalMatch) {
+      const total = Number(totalMatch[1]);
+      setChunkProgress(prev => ({
+        ...prev,
+        total: total,
+        summaries: Array.from({length: total}, (_, i) => ({
+          chunk: i + 1,
+          summary: '',
+          status: 'pending' as const
+        }))
+      }));
+      setAnalysisPhase('analyzing');
+    }
+    
+    // 현재 청크 파싱
+    const chunkMatch = msg.match(/청크 (\d+)\/(\d+) 분석 중/);
+    if (chunkMatch) {
+      const current = Number(chunkMatch[1]);
+      const total = Number(chunkMatch[2]);
+      setChunkProgress(prev => ({
+        ...prev,
+        current: current,
+        total: total
+      }));
+    }
+    
+    // 청크 완료 파싱 (LLM 요약 완료)
+    if (msg.includes('LLM 요약 완료')) {
+      setChunkProgress(prev => {
+        const newSummaries = [...prev.summaries];
+        if (prev.current > 0 && prev.current <= newSummaries.length) {
+          newSummaries[prev.current - 1] = {
+            ...newSummaries[prev.current - 1],
+            status: 'completed',
+            summary: `청크 ${prev.current} 분석 완료` // 실제 요약은 백엔드에서 받아야 함
+          };
+        }
+        return {
+          ...prev,
+          completed: prev.completed + 1,
+          summaries: newSummaries
+        };
+      });
+    }
+    
+    // 최종 요약 시작
+    if (msg.includes('최종 요약 생성 중')) {
+      setAnalysisPhase('finalizing');
+    }
   };
 
   // 연속된 줄바꿈을 하나로 치환하는 함수
@@ -292,50 +359,102 @@ export default function FGIAnalysisPage() {
     return chunks;
   };
 
-  // polling으로 진행상황을 주기적으로 조회
-  const pollProgress = (jobId: string) => {
-    pollingRef.current = setInterval(async () => {
+  // 분석 진행상황 WebSocket 연결
+  useEffect(() => {
+    if (!isProcessing || !jobId) return;
+    // ws://localhost:8000/ws/fgi-progress/{job_id}
+    const wsUrl = (process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000").replace(/^http/, 'ws') + `/ws/fgi-progress/${jobId}`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      console.log('WebSocket 연결 성공'); // 디버깅 로그 추가
+      // 연결 유지용 ping
+      const ping = setInterval(() => ws.send('ping'), 30000);
+      ws.onclose = () => {
+        console.log('WebSocket 연결 종료'); // 디버깅 로그 추가
+        clearInterval(ping);
+      };
+    };
+    ws.onmessage = (event) => {
+      console.log('WebSocket 메시지 수신:', event.data); // 디버깅 로그 추가
       try {
-        const res = await fetch(`/api/fgi-analysis?jobId=${jobId}`);
-        const data = await res.json();
-        console.log('[FGI][polling] 받은 데이터:', data);
+        const data = JSON.parse(event.data);
+        console.log('파싱된 WebSocket 데이터:', data); // 디버깅 로그 추가
         
-        setProgressAndLog(data.progress || "");
-        setCurrentChunk(typeof data.current === "number" ? data.current : 0);
-        setTotalChunks(typeof data.total === "number" ? data.total : 0);
+        // 진행 상황 업데이트
+        if (data.current !== undefined && data.total !== undefined) {
+          setChunkProgress(prev => ({
+            ...prev,
+            current: data.current,
+            total: data.total,
+            completed: data.current,
+          }));
+        }
         
-        // final_summary가 있으면 모든 결과 데이터를 설정
-        if (data.final_summary) {
-          console.log('[FGI][polling] final_summary 발견, summaryResult 설정');
-          setSummaryResult({ 
-            summary: data.final_summary,
-            chunk_summaries: data.chunk_summaries || []
+        // 청크 요약 실시간 반영
+        if (data.chunk_index !== undefined && data.chunk_summary !== undefined) {
+          setChunkProgress(prev => {
+            const newSummaries = [...prev.summaries];
+            // chunk는 1부터, index는 0부터이므로 +1
+            const chunkNum = data.chunk_index + 1;
+            const existingIdx = newSummaries.findIndex(s => s.chunk === chunkNum);
+            if (existingIdx !== -1) {
+              newSummaries[existingIdx] = {
+                ...newSummaries[existingIdx],
+                summary: data.chunk_summary,
+                status: data.progress?.includes('실패') ? 'error' : 'completed'
+              };
+            } else {
+              newSummaries.push({
+                chunk: chunkNum,
+                summary: data.chunk_summary,
+                status: data.progress?.includes('실패') ? 'error' : 'completed'
+              });
+            }
+            // chunk 번호순 정렬
+            newSummaries.sort((a, b) => a.chunk - b.chunk);
+            return {
+              ...prev,
+              summaries: newSummaries
+            };
           });
         }
         
-        // subject_summary가 있으면 주제별 분석 결과를 설정
-        if (data.subject_summary) {
-          console.log('[FGI][polling] subject_summary 발견, subjectSummary 설정');
-          setSubjectSummary(data.subject_summary);
+        // 진행 메시지 업데이트
+        if (data.progress) {
+          setProgress(data.progress);
+          console.log('진행 상황 업데이트:', data.progress); // 디버깅 로그 추가
         }
         
-        console.log('[FGI][polling] progress:', data.progress);
-        if (data.progress === "완료!" || data.progress === "중단됨") {
-          console.log('[FGI][polling] 완료/중단 감지, polling 종료');
-          clearInterval(pollingRef.current!);
-          pollingRef.current = null;
-          setIsProcessing(false);
+        // 최종 요약 업데이트
+        if (data.final_summary) {
+          setFinalSummary(data.final_summary);
+          console.log('최종 요약 업데이트:', data.final_summary); // 디버깅 로그 추가
         }
-      } catch (error) {
-        console.error('[FGI][polling] 오류:', error);
+        
+        // 분석 완료 시 처리
+        if (data.progress === "완료!" || data.progress === "에러 발생") {
+          console.log('분석 완료 또는 에러 발생'); // 디버깅 로그 추가
+          setIsProcessing(false);
+          ws.close();
+        }
+      } catch (e) {
+        console.error('WebSocket 메시지 파싱 오류:', e); // 에러 로그 추가
       }
-    }, 1000);
-  };
+    };
+    ws.onerror = (error) => {
+      console.error('WebSocket 에러:', error); // 디버깅 로그 추가
+      ws.close();
+    };
+    return () => {
+      ws.close();
+    };
+  }, [isProcessing, jobId]);
 
   const handleStop = async () => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
     }
     if (jobId) {
       await fetch(`/api/fgi-analysis?jobId=${jobId}`, { method: 'DELETE' });
@@ -367,42 +486,59 @@ export default function FGIAnalysisPage() {
     setSummaryResult(null);
     setCurrentChunk(0);
     setJobId(null);
+    setChunkProgress({total: 0, current: 0, completed: 0, summaries: []});
+    setFinalSummary("");
+    setAnalysisPhase('idle');
     try {
       let file: File;
-      
-      // 파일 선택
       if (analysisMode === 'audio') {
         file = audioFiles[0];
       } else {
         file = docFiles[0];
       }
-      
-      // Python 백엔드 API 호출
       const formData = new FormData();
       formData.append("file", file);
       if (user?.id) {
         formData.append("user_id", user.id);
       }
-
+      // job_id 생성 및 전달
+      const job_id = crypto.randomUUID();
+      setJobId(job_id);
+      formData.append("job_id", job_id);
       const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const response = await fetch(`${baseUrl}/api/fgi`, {
+      const response = await fetch(`${baseUrl}/api/v1/fgi/analyze`, {
         method: "POST",
         body: formData,
       });
-
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`FGI API 호출 실패: ${errorText}`);
       }
-
       const result = await response.json();
+      console.log('FGI 분석 응답:', result); // 디버깅용 로그 추가
       if (result.success) {
-        setSummaryResult(result.result);
+        setSummaryResult({
+          summary: result.final_summary,
+          chunk_summaries: result.chunk_summaries || []
+        });
+        setFinalSummary(result.final_summary || "");
+        if (result.chunk_details && Array.isArray(result.chunk_details)) {
+          setChunkProgress(prev => ({
+            ...prev,
+            summaries: result.chunk_details.map((detail: any, index: number) => ({
+              chunk: index + 1,
+              summary: detail.summary || '',
+              status: 'completed' as const
+            })),
+            completed: result.chunk_details.length,
+            current: 0
+          }));
+        }
         setProgress("분석 완료!");
+        setAnalysisPhase('completed');
       } else {
         throw new Error(result.error || "FGI 분석 중 오류가 발생했습니다.");
       }
-      
     } catch (error) {
       setError(error instanceof Error ? error.message : 'FGI 분석 중 오류가 발생했습니다.');
     } finally {
@@ -583,7 +719,7 @@ export default function FGIAnalysisPage() {
     
     try {
       const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const res = await fetch(`${baseUrl}/api/guide-topics`, { 
+      const res = await fetch(`${baseUrl}/api/v1/fgi/extract-guide-subjects`, { 
         method: 'POST', 
         body: formData 
       });
@@ -593,8 +729,8 @@ export default function FGIAnalysisPage() {
       }
       
       const data = await res.json();
-      setGuideTopics(data.topics || []);
-      console.log('추출된 주제들:', data.topics);
+      setGuideTopics(data.subjects || []);
+      console.log('추출된 주제들:', data.subjects);
     } catch (error) {
       console.error('가이드라인 업로드 오류:', error);
       setGuideError(error instanceof Error ? error.message : '가이드라인 처리 중 오류가 발생했습니다.');
@@ -721,6 +857,13 @@ export default function FGIAnalysisPage() {
         : [...prev, topic]
     );
   }
+
+  useEffect(() => {
+    // 분석 방식이 바뀌면 결과 상태 초기화
+    setSummaryResult(null);
+    setFinalSummary("");
+    setChunkProgress({ total: 0, current: 0, completed: 0, summaries: [] });
+  }, [analysisMode]);
 
   if (authLoading) {
     return (
@@ -888,8 +1031,209 @@ export default function FGIAnalysisPage() {
           </Card>
           </>
         )}
+        {/* audio 모드일 때 파일 업로드 UI 추가 */}
+        {analysisMode === "audio" && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Mic className="mr-2 h-5 w-5" />
+                {TEXT.audio_upload[lang]}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div
+                {...getAudioRootProps()}
+                className={`mt-2 border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${
+                  isAudioDragActive
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900'
+                    : 'border-gray-300 hover:border-gray-400 dark:border-gray-600'
+                }`}
+              >
+                <input {...getAudioInputProps()} />
+                <Mic className="mx-auto h-8 w-8 text-gray-400 mb-2" />
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  {isAudioDragActive ? TEXT.drag_drop[lang] : TEXT.audio_formats[lang]}
+                </p>
+              </div>
+              {audioFiles.length > 0 && (
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg dark:bg-green-900 dark:border-green-700">
+                  <div className="flex items-center">
+                    <CheckCircle className="h-4 w-4 text-green-600 mr-2" />
+                    <span className="text-sm text-green-800 dark:text-green-200">
+                      음성 파일 업로드됨: {audioFiles.map(f => f.name).join(', ')}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+        {/* doc-summary 모드일 때 파일 업로드 UI 추가 */}
+        {analysisMode === "doc-summary" && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <FileText className="mr-2 h-5 w-5" />
+                {TEXT.doc_upload[lang]}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div
+                {...getDocRootProps()}
+                className={`mt-2 border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${
+                  isDocDragActive
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900'
+                    : 'border-gray-300 hover:border-gray-400 dark:border-gray-600'
+                }`}
+              >
+                <input {...getDocInputProps()} />
+                <FileText className="mx-auto h-8 w-8 text-gray-400 mb-2" />
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  {isDocDragActive ? TEXT.drag_drop[lang] : TEXT.doc_formats[lang]}
+                </p>
+              </div>
+              {docFiles.length > 0 && (
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg dark:bg-green-900 dark:border-green-700">
+                  <div className="flex items-center">
+                    <CheckCircle className="h-4 w-4 text-green-600 mr-2" />
+                    <span className="text-sm text-green-800 dark:text-green-200">
+                      문서 파일 업로드됨: {docFiles.map(f => f.name).join(', ')}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </aside>
       <main className="flex-1 flex flex-col px-12 py-10 min-h-screen dark:bg-gray-900 dark:text-gray-100">
+        {/* 문서 요약(doc-summary) 모드 UI 추가 */}
+        {analysisMode === "doc-summary" && (
+          <div className="w-full max-w-4xl mx-auto flex flex-col gap-6">
+            {/* 파일 미리보기 */}
+            {docFiles.length > 0 && (
+              <Card className="mb-4">
+                <CardHeader>
+                  <CardTitle>문서 미리보기</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="whitespace-pre-line text-sm text-gray-700 dark:text-gray-200">
+                    {docSummaryPreview || "미리보기를 불러오는 중..."}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            {/* 분석 버튼 */}
+            {docFiles.length > 0 && (
+              <Button
+                className="w-full h-14 text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-lg transition"
+                disabled={isProcessing}
+                onClick={handleAnalyze}
+              >
+                {isProcessing ? '분석 중...' : '문서 요약 분석 실행'}
+              </Button>
+            )}
+            
+            {/* 분석 진행상황 */}
+            {isProcessing && !finalSummary && (
+              <Card className="mb-6">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                    분석 진행상황
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {/* 전체 진행률 */}
+                    <div className="mb-4">
+                      <div className="flex justify-between text-sm text-gray-600 mb-2">
+                        <span>전체 진행률</span>
+                        <span>{chunkProgress.completed}/{chunkProgress.total}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                          style={{width: `${chunkProgress.total > 0 ? (chunkProgress.completed / chunkProgress.total) * 100 : 0}%`}}
+                        ></div>
+                      </div>
+                    </div>
+                    
+                    {/* 현재 분석 중인 청크 */}
+                    {chunkProgress.current > 0 && (
+                      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                          <span className="font-medium">청크 {chunkProgress.current} 분석 중...</span>
+                        </div>
+                        <div className="text-sm text-gray-600">
+                          {progress}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* 완료된 청크 요약들 */}
+                    {chunkProgress.summaries.filter(s => s.status === 'completed').length > 0 && (
+                      <div className="space-y-3">
+                        <h4 className="font-medium text-gray-800">완료된 청크 요약</h4>
+                        <div className="max-h-64 overflow-y-auto space-y-3">
+                          {chunkProgress.summaries
+                            .filter(s => s.status === 'completed')
+                                                         .map((summary, idx) => (
+                               <div key={summary.chunk} className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                                 <div className="flex items-center gap-2 mb-2">
+                                   <CheckCircle className="h-4 w-4 text-green-600" />
+                                   <span className="font-medium">청크 {summary.chunk}</span>
+                                 </div>
+                                 <div className="text-sm text-gray-700 whitespace-pre-line">
+                                   {summary.summary || `청크 ${summary.chunk} 분석 완료`}
+                                 </div>
+                               </div>
+                             ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* 최종 분석 결과 */}
+            {finalSummary && (
+              <Card className="mb-6">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                    최종 분석 결과
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="prose dark:prose-invert max-w-none">
+                    <ReactMarkdown>
+                      {finalSummary}
+                    </ReactMarkdown>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* 기존 분석 결과 (하위 호환성) */}
+            {summaryResult && !finalSummary && (
+              <Card className="mb-6">
+                <CardHeader>
+                  <CardTitle>문서 요약 결과</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="prose dark:prose-invert max-w-none">
+                    <ReactMarkdown>
+                      {summaryResult.summary || summaryResult.final_summary || '분석 결과가 없습니다.'}
+                    </ReactMarkdown>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
         {analysisMode === "topic-analysis" && guideTopics.length > 0 && (
           <>
             <div className="w-full max-w-3xl mx-auto flex flex-col gap-6">
@@ -1084,36 +1428,6 @@ export default function FGIAnalysisPage() {
             </Card>
           </div>
         )}
-        {isProcessing && (
-          <div className="flex gap-2 mb-4">
-            <Button onClick={handleStop} variant="destructive">
-              정지
-            </Button>
-        <Button 
-              onClick={async () => {
-                if (jobId) {
-                  const res = await fetch(`/api/fgi-analysis?jobId=${jobId}`);
-                  const data = await res.json();
-                  console.log('[FGI][수동 확인] 데이터:', data);
-                  if (data.final_summary) {
-                    setSummaryResult({ 
-                      summary: data.final_summary,
-                      chunk_summaries: data.chunk_summaries || []
-                    });
-                    setIsProcessing(false);
-                    if (pollingRef.current) {
-                      clearInterval(pollingRef.current);
-                      pollingRef.current = null;
-                    }
-                  }
-                }
-              }} 
-              variant="outline"
-            >
-              결과 확인
-        </Button>
-          </div>
-        )}
         {error && (
           <Card className="mb-6">
             <CardHeader>
@@ -1126,12 +1440,6 @@ export default function FGIAnalysisPage() {
               <div className="text-sm text-red-700">{error}</div>
             </CardContent>
           </Card>
-        )}
-        {summaryResult && summaryResult.summary && (
-          <div className="mt-6 p-4 bg-gray-100 rounded-md">
-            <h4 className="font-bold mb-2">분석 요약</h4>
-            <p className="text-sm text-gray-800">{summaryResult.summary}</p>
-          </div>
         )}
         {summaryResult && (
           <Card className="mb-6">

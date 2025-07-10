@@ -7,6 +7,9 @@ import json
 from typing import Optional, Dict, Any, List
 import os
 from dotenv import load_dotenv
+from dotenv import load_dotenv
+import os
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 try:
     from supabase import create_client, Client
 except ImportError:
@@ -24,12 +27,21 @@ from workflows.langgraph_workflow import LangGraphWorkflow
 from workflows.fgi_workflow import FGIWorkflow
 from workflows.planner_workflow import PlannerWorkflow
 from workflows.visualization_workflow import VisualizationWorkflow
+
+# Clean Architecture 임포트
+from app.domain.planner.use_cases import CreateSurveyPlanUseCase
+from app.domain.planner.services import PlannerService
+from app.infrastructure.openai.client import OpenAIClient as CleanOpenAIClient
+
+# Clean Architecture API 라우터 임포트
+from app.api.v1.planner.router import router as planner_router
+from app.api.v1.table_analysis.router import router as table_analysis_router
+from app.api.v1.fgi.router import router as fgi_router
 from utils.openai_client import OpenAIClient
 from utils.data_processor import DataProcessor
 from utils.supabase_client import get_supabase
 import uuid
-
-load_dotenv()
+from app.api.v1.fgi.ws_router import ws_router
 
 app = FastAPI(title="Survey AI Backend", version="1.0.0")
 
@@ -41,6 +53,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Clean Architecture API 라우터 등록
+app.include_router(planner_router, prefix="/api/v1")
+app.include_router(table_analysis_router, prefix="/api/v1")
+app.include_router(fgi_router, prefix="/api/v1")
+app.include_router(ws_router)
 
 # 워크플로우 인스턴스
 langgraph_workflow = LangGraphWorkflow()
@@ -108,13 +126,13 @@ async def langgraph_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# fgi-analysis 문서 요약 방법 logic
+# fgi-analysis 문서 요약 방법 logic (기존 호환성 유지)
 @app.post("/api/fgi")
 async def fgi_analysis(
     file: UploadFile = File(...),
     user_id: Optional[str] = Form(None)
 ):
-    """FGI 워크플로우 실행"""
+    """FGI 워크플로우 실행 (기존 호환성)"""
     try:
         # 메인 파일 읽기
         file_content = await file.read()
@@ -124,7 +142,7 @@ async def fgi_analysis(
             "user_id": user_id
         }
         
-        # 워크플로우 실행
+        # 워크플로우 실행 (기존 방식 유지)
         result = await fgi_workflow.execute(
             file_content=file_content,
             file_name=file.filename,
@@ -160,7 +178,7 @@ async def openai_call(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# survey-planner page logic
+# survey-planner page logic (Clean Architecture)
 @app.post("/api/planner")
 async def planner_workflow_endpoint(
     topic: str = Form(...),
@@ -168,19 +186,18 @@ async def planner_workflow_endpoint(
     lang: str = Form("한국어"),
     user_id: Optional[str] = Form(None)
 ):
-    """설문 계획 워크플로우 실행"""
+    """설문 계획 워크플로우 실행 (Clean Architecture)"""
     try:
-        # 옵션 설정
-        options = {
-            "user_id": user_id
-        }
+        # Clean Architecture 의존성 주입
+        openai_client = CleanOpenAIClient()
+        planner_service = PlannerService(openai_client)
+        use_case = CreateSurveyPlanUseCase(planner_service)
         
-        # 워크플로우 실행
-        result = await planner_workflow.execute(
+        # 유스케이스 실행
+        result = await use_case.execute(
             topic=topic,
             objective=objective,
-            lang=lang,
-            on_step=options.get("on_step")
+            lang=lang
         )
         
         return JSONResponse(content=result)
@@ -259,6 +276,7 @@ async def docx_to_text(file: UploadFile = File(...)):
 
 @app.post("/api/guide-topics")
 async def guide_topics(file: UploadFile = File(...)):
+    """가이드 주제 추출 (기존 호환성)"""
     try:
         file_content = await file.read()
         topics = await fgi_workflow.LLM_extract_guide_subjects_from_text(file_content)
