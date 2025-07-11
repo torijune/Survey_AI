@@ -39,6 +39,7 @@ class AgentState:
         self.revised_analysis_history = kwargs.get("revised_analysis_history", [])
         self.user_id = kwargs.get("user_id", None)
         self.survey_data = kwargs.get("survey_data", None)
+        self.use_statistical_test = kwargs.get("use_statistical_test", True)
 
 
 class TableAnalysisRequest(BaseModel):

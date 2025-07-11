@@ -23,7 +23,6 @@ import numpy as np
 from datetime import datetime
 
 # 워크플로우 임포트
-from workflows.langgraph_workflow import LangGraphWorkflow
 from workflows.fgi_workflow import FGIWorkflow
 from workflows.planner_workflow import PlannerWorkflow
 from workflows.visualization_workflow import VisualizationWorkflow
@@ -37,6 +36,7 @@ from app.infrastructure.openai.client import OpenAIClient as CleanOpenAIClient
 from app.api.v1.planner.router import router as planner_router
 from app.api.v1.table_analysis.router import router as table_analysis_router
 from app.api.v1.fgi.router import router as fgi_router
+from app.api.v1.batch_analysis.router import router as batch_analysis_router
 from utils.openai_client import OpenAIClient
 from utils.data_processor import DataProcessor
 from utils.supabase_client import get_supabase
@@ -58,10 +58,10 @@ app.add_middleware(
 app.include_router(planner_router, prefix="/api/v1")
 app.include_router(table_analysis_router, prefix="/api/v1")
 app.include_router(fgi_router, prefix="/api/v1")
+app.include_router(batch_analysis_router, prefix="/api/v1")
 app.include_router(ws_router)
 
 # 워크플로우 인스턴스
-langgraph_workflow = LangGraphWorkflow()
 fgi_workflow = FGIWorkflow()
 planner_workflow = PlannerWorkflow()
 visualization_workflow = VisualizationWorkflow()
@@ -92,7 +92,7 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-# table-analysis page langgraph logic
+# table-analysis page logic (Clean Architecture)
 @app.post("/api/langgraph")
 async def langgraph_analysis(
     file: UploadFile = File(...),
@@ -101,10 +101,14 @@ async def langgraph_analysis(
     lang: str = Form("한국어"),
     user_id: Optional[str] = Form(None)
 ):
-    """LangGraph 워크플로우 실행"""
+    """테이블 분석 실행 (Clean Architecture)"""
     try:
         # 파일 읽기
         file_content = await file.read()
+        
+        # Clean Architecture 워크플로우 사용
+        from app.infrastructure.workflow.table_analysis_workflow import TableAnalysisWorkflow
+        workflow = TableAnalysisWorkflow()
         
         # 옵션 설정
         options = {
@@ -115,9 +119,9 @@ async def langgraph_analysis(
         }
         
         # 워크플로우 실행
-        result = await langgraph_workflow.execute(
+        result = await workflow.execute(
             file_content=file_content,
-            file_name=file.filename,
+            file_name=file.filename or "unknown",
             options=options
         )
         
@@ -145,7 +149,7 @@ async def fgi_analysis(
         # 워크플로우 실행 (기존 방식 유지)
         result = await fgi_workflow.execute(
             file_content=file_content,
-            file_name=file.filename,
+            file_name=file.filename or "unknown",
             options=options
         )
         
@@ -229,7 +233,7 @@ async def visualization_workflow_endpoint(
         file_content = await file.read()
 
         # 테이블 파싱만 수행
-        survey_data = await visualization_workflow.load_survey_tables(file_content, file.filename)
+        survey_data = await visualization_workflow.load_survey_tables(file_content, file.filename or "unknown")
         tables = {}
         for key in survey_data["question_keys"]:
             table = survey_data["tables"][key]
@@ -363,7 +367,7 @@ async def table_parse(
     """테이블 파싱만 수행"""
     try:
         file_content = await file.read()
-        parsed = data_processor.load_survey_tables(file_content, file.filename)
+        parsed = data_processor.load_survey_tables(file_content, file.filename or "unknown")
         
         # DataFrame -> list 변환
         tables = {}
@@ -390,7 +394,8 @@ async def table_analyze(
     lang: str = Form("한국어"),
     user_id: Optional[str] = Form(None),
     analysis_type: str = Form("analyze"),
-    batch_test_types: str = Form(None)
+    batch_test_types: str = Form(None),
+    use_statistical_test: str = Form("true")
 ):
     """테이블 AI 분석 수행 (단일/전체/추천)"""
     try:
@@ -399,8 +404,12 @@ async def table_analyze(
         # 1. test_type 추천만 요청
         if analysis_type == "recommend_test_types":
             print("[DEBUG] recommend_test_types 분기 진입")
+            # Clean Architecture 워크플로우 사용
+            from app.infrastructure.workflow.table_analysis_workflow import TableAnalysisWorkflow
+            workflow = TableAnalysisWorkflow()
+            
             # 엑셀 파싱
-            parsed = await langgraph_workflow.load_survey_tables(file_content, file.filename)
+            parsed = await workflow.load_survey_tables(file_content, file.filename or "unknown")
             question_keys = parsed["question_keys"]
             question_texts = parsed["question_texts"]
             tables = parsed["tables"]
@@ -411,7 +420,7 @@ async def table_analyze(
                 question_infos.append({"key": key, "text": question_texts[key], "columns": columns})
             try:
                 print("[DEBUG] test_type_map 추천 시도")
-                test_type_map = await langgraph_workflow.decide_batch_test_types(question_infos, lang=lang)
+                test_type_map = await workflow.decide_batch_test_types(question_infos, lang=lang)
                 if not test_type_map or not isinstance(test_type_map, dict):
                     # fallback: 모두 ft_test
                     test_type_map = {q["key"]: "오류 발생" for q in question_infos}
@@ -427,200 +436,108 @@ async def table_analyze(
                 "question_texts": question_texts
             }
         elif analysis_type == "analyze":
+            # Clean Architecture 워크플로우 사용
+            from app.infrastructure.workflow.table_analysis_workflow import TableAnalysisWorkflow
+            workflow = TableAnalysisWorkflow()
+            
+            # use_statistical_test를 boolean으로 변환
+            use_statistical_test_bool = use_statistical_test.lower() == "true"
+            
             options = {
                 "analysis_type": True,
                 "selected_key": selected_key,
                 "lang": lang,
                 "user_id": user_id if user_id is not None else None,
                 "raw_data_content": raw_data_content if raw_data_content is not None else None,
-                "raw_data_filename": raw_data_file.filename if raw_data_file else None
+                "raw_data_filename": raw_data_file.filename if raw_data_file else None,
+                "use_statistical_test": use_statistical_test_bool
             }
             # Only pass raw_data_content and raw_data_filename if not None
-            execute_kwargs = dict(
-                file_content=file_content,
-                file_name=file.filename,
-                options=options
-            )
-            if raw_data_content is not None:
-                execute_kwargs["raw_data_content"] = raw_data_content
-            if raw_data_file and raw_data_file.filename:
-                execute_kwargs["raw_data_filename"] = raw_data_file.filename
-            result = await langgraph_workflow.execute(**execute_kwargs)
+            if raw_data_content is not None and raw_data_file and raw_data_file.filename:
+                result = await workflow.execute(
+                    file_content=file_content,
+                    file_name=file.filename or "unknown",
+                    options=options,
+                    raw_data_content=raw_data_content,
+                    raw_data_filename=raw_data_file.filename
+                )
+            elif raw_data_content is not None:
+                result = await workflow.execute(
+                    file_content=file_content,
+                    file_name=file.filename or "unknown",
+                    options=options,
+                    raw_data_content=raw_data_content
+                )
+            elif raw_data_file and raw_data_file.filename:
+                result = await workflow.execute(
+                    file_content=file_content,
+                    file_name=file.filename or "unknown",
+                    options=options,
+                    raw_data_filename=raw_data_file.filename
+                )
+            else:
+                result = await workflow.execute(
+                    file_content=file_content,
+                    file_name=file.filename or "unknown",
+                    options=options
+                )
             return JSONResponse(content=clean_json(result))
         elif analysis_type == "batch" and batch_test_types:
             import json
             test_type_map = json.loads(batch_test_types)
-            execute_batch_kwargs = dict(
-                file_content=file_content,
-                file_name=file.filename,
-                test_type_map=test_type_map,
-                lang=lang,
-                user_id=user_id if user_id is not None else None
-            )
-            if raw_data_content is not None:
-                execute_batch_kwargs["raw_data_content"] = raw_data_content
-            if raw_data_file and raw_data_file.filename:
-                execute_batch_kwargs["raw_data_filename"] = raw_data_file.filename
-            result = await langgraph_workflow.execute_batch(**execute_batch_kwargs)
+            use_statistical_test_bool = use_statistical_test.lower() == "true"
+            
+            # Clean Architecture 워크플로우 사용
+            from app.infrastructure.workflow.table_analysis_workflow import TableAnalysisWorkflow
+            workflow = TableAnalysisWorkflow()
+            
+            if raw_data_content is not None and raw_data_file and raw_data_file.filename:
+                result = await workflow.execute_batch(
+                    file_content=file_content,
+                    file_name=file.filename or "unknown",
+                    test_type_map=test_type_map,
+                    lang=lang,
+                    user_id=user_id if user_id is not None else None,
+                    raw_data_content=raw_data_content,
+                    raw_data_filename=raw_data_file.filename,
+                    use_statistical_test=use_statistical_test_bool
+                )
+            elif raw_data_content is not None:
+                result = await workflow.execute_batch(
+                    file_content=file_content,
+                    file_name=file.filename or "unknown",
+                    test_type_map=test_type_map,
+                    lang=lang,
+                    user_id=user_id if user_id is not None else None,
+                    raw_data_content=raw_data_content,
+                    use_statistical_test=use_statistical_test_bool
+                )
+            elif raw_data_file and raw_data_file.filename:
+                result = await workflow.execute_batch(
+                    file_content=file_content,
+                    file_name=file.filename or "unknown",
+                    test_type_map=test_type_map,
+                    lang=lang,
+                    user_id=user_id if user_id is not None else None,
+                    raw_data_filename=raw_data_file.filename,
+                    use_statistical_test=use_statistical_test_bool
+                )
+            else:
+                result = await workflow.execute_batch(
+                    file_content=file_content,
+                    file_name=file.filename or "unknown",
+                    test_type_map=test_type_map,
+                    lang=lang,
+                    user_id=user_id if user_id is not None else None,
+                    use_statistical_test=use_statistical_test_bool
+                )
             return {"success": True, "result": result["result"]}
         else:
             raise HTTPException(status_code=400, detail="Invalid analysis_type or missing batch_test_types")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/batch-analyze")
-async def batch_analyze(
-    file: UploadFile = File(...),
-    raw_data_file: UploadFile = File(None),
-    lang: str = Form("한국어"),
-    user_id: str = Form(...),
-    batch_test_types: str = Form(...),
-    file_name: str = Form(None)
-):
-    """Supabase 기반 비동기 전체 분석 시작: job_id 반환, 각 질문별로 DB에 row 생성, 비동기로 분석 시작"""
-    try:
-        file_content = await file.read()
-        raw_data_content = await raw_data_file.read() if raw_data_file else None
-        test_type_map = json.loads(batch_test_types)
-        supabase = get_supabase()
-        # 1. job_id 생성 및 jobs 테이블 row 생성
-        job_id = str(uuid.uuid4())
-        file_name = file_name or file.filename
-        supabase.table("batch_analysis_jobs").insert({
-            "id": job_id,
-            "user_id": user_id,
-            "file_name": file_name,
-            "status": "pending"
-        }).execute()
-        # 2. 테이블 파싱 및 질문 목록 추출
-        from workflows.langgraph_workflow import LangGraphWorkflow
-        workflow = LangGraphWorkflow()
-        parsed = await workflow.load_survey_tables(file_content, file_name)
-        question_keys = parsed["question_keys"]
-        # 3. 각 질문별로 results row 생성 (status=pending)
-        for key in question_keys:
-            supabase.table("batch_analysis_results").insert({
-                "job_id": job_id,
-                "question_key": key,
-                "status": "pending"
-            }).execute()
-        # 4. 비동기 분석 시작 (백그라운드)
-        async def analyze_questions():
-            for key in question_keys:
-                # 이미 완료된 row는 skip (복구 지원)
-                res = supabase.table("batch_analysis_results").select("status").eq("job_id", job_id).eq("question_key", key).execute()
-                if res.data and res.data[0]["status"] == "done":
-                    continue
-                # running으로 업데이트
-                supabase.table("batch_analysis_results").update({"status": "running"}).eq("job_id", job_id).eq("question_key", key).execute()
-                try:
-                    # 기존 워크플로우 실행
-                    state = await workflow.execute(
-                        file_content=file_content,
-                        file_name=file_name,
-                        options={
-                            "analysis_type": False,
-                            "selected_key": key,
-                            "lang": lang,
-                            "user_id": user_id
-                        },
-                        raw_data_content=raw_data_content,
-                        raw_data_filename=raw_data_file.filename if raw_data_file else None
-                    )
-                    # 결과 저장
-                    supabase.table("batch_analysis_results").update({
-                        "status": "done",
-                        "result": state["result"] if state.get("success") else None,
-                        "error": state.get("error")
-                    }).eq("job_id", job_id).eq("question_key", key).execute()
-                except Exception as e:
-                    supabase.table("batch_analysis_results").update({
-                        "status": "error",
-                        "error": str(e)
-                    }).eq("job_id", job_id).eq("question_key", key).execute()
-            # 전체 완료 시 jobs 테이블 status 업데이트
-            supabase.table("batch_analysis_jobs").update({"status": "done"}).eq("id", job_id).execute()
-        asyncio.create_task(analyze_questions())
-        return {"success": True, "job_id": job_id}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/api/batch-status")
-async def batch_status(job_id: str):
-    """job_id로 각 질문별 status/result/error 반환"""
-    try:
-        supabase = get_supabase()
-        res = supabase.table("batch_analysis_results").select("question_key,status,result,error,updated_at").eq("job_id", job_id).execute()
-        return {"success": True, "results": res.data}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/batch-cancel")
-async def batch_cancel(job_id: str):
-    """job_id로 batch 취소: jobs, 미완료 질문 status를 cancelled로"""
-    try:
-        supabase = get_supabase()
-        supabase.table("batch_analysis_jobs").update({"status": "cancelled"}).eq("id", job_id).execute()
-        supabase.table("batch_analysis_results").update({"status": "cancelled"}).eq("job_id", job_id).in_("status", ["pending", "running"]).execute()
-        # 로그 기록
-        supabase.table("batch_analysis_logs").insert({"job_id": job_id, "event": "cancel", "timestamp": datetime.utcnow().isoformat()}).execute()
-        return {"success": True}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/batch-restart")
-async def batch_restart(job_id: str):
-    """job_id의 미완료 질문만 이어서 재분석"""
-    try:
-        supabase = get_supabase()
-        # job 정보/파일명/유저 등 조회
-        job = supabase.table("batch_analysis_jobs").select("file_name,user_id").eq("id", job_id).single().execute().data
-        if not job:
-            return {"success": False, "error": "job_id not found"}
-        file_name = job["file_name"]
-        user_id = job["user_id"]
-        # 미완료 질문 조회
-        res = supabase.table("batch_analysis_results").select("question_key").eq("job_id", job_id).in_("status", ["pending", "running", "error", "cancelled"]).execute()
-        question_keys = [r["question_key"] for r in res.data]
-        # 파일은 별도 저장소에서 불러와야 함(여기선 생략, 실제 서비스에선 파일 저장 필요)
-        # 로그 기록
-        supabase.table("batch_analysis_logs").insert({"job_id": job_id, "event": "restart", "timestamp": datetime.utcnow().isoformat()}).execute()
-        # 실제 재분석은 기존 batch_analyze의 analyze_questions와 유사하게 구현 필요(여기선 생략)
-        return {"success": True, "message": "재분석이 시작되었습니다. (실제 파일 불러오기/분석 로직 필요)"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/api/batch-log")
-async def batch_log(job_id: str):
-    """job_id별 로그 반환"""
-    try:
-        supabase = get_supabase()
-        logs = supabase.table("batch_analysis_logs").select("event,timestamp").eq("job_id", job_id).order("timestamp").execute().data
-        return {"success": True, "logs": logs}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/batch-log")
-async def batch_log_post(job_id: str, event: str):
-    """로그 기록"""
-    try:
-        supabase = get_supabase()
-        supabase.table("batch_analysis_logs").insert({"job_id": job_id, "event": event, "timestamp": datetime.utcnow().isoformat()}).execute()
-        return {"success": True}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/api/batch-download")
-async def batch_download(job_id: str):
-    """job_id별 전체 결과 JSON 다운로드"""
-    try:
-        supabase = get_supabase()
-        res = supabase.table("batch_analysis_results").select("question_key,result,status,error").eq("job_id", job_id).execute()
-        import io, json
-        buf = io.BytesIO(json.dumps(res.data, ensure_ascii=False, indent=2).encode("utf-8"))
-        return StreamingResponse(buf, media_type="application/json", headers={"Content-Disposition": f"attachment; filename=batch_{job_id}_results.json"})
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+# 기존 배치 분석 엔드포인트들은 Clean Architecture로 리팩토링되어 /api/v1/batch-analysis/ 라우터로 이동
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 

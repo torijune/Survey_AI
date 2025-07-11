@@ -7,7 +7,7 @@ class TableAnalysisUseCase:
     def __init__(self, service: TableAnalysisService):
         self.service = service
 
-    async def execute(self, file_content: bytes, file_name: str, options: Dict[str, Any] = None, raw_data_content: bytes = None, raw_data_filename: str = None) -> Dict[str, Any]:
+    async def execute(self, file_content: bytes, file_name: str, options: Dict[str, Any] = None, raw_data_content: bytes = None, raw_data_filename: str = None, use_statistical_test: bool = True) -> Dict[str, Any]:
         try:
             state = AgentState(
                 uploaded_file=file_content,
@@ -18,6 +18,8 @@ class TableAnalysisUseCase:
                 user_id=options.get("user_id") if options else None,
                 raw_data_file=raw_data_content
             )
+            # use_statistical_test 설정
+            state.use_statistical_test = use_statistical_test
             on_step = options.get("on_step") if options else None
 
             state = await self.service.parse_table(state, on_step)
@@ -55,7 +57,7 @@ class TableAnalysisUseCase:
                     "anchor": state.anchor,
                     "revised_analysis_history": state.revised_analysis_history,
                     "test_type": state.test_type,
-                    "ft_test_result": state.ft_test_result.to_dict(orient="records") if hasattr(state.ft_test_result, "to_dict") else state.ft_test_result,
+                    "ft_test_result": state.ft_test_result.to_dict(orient="records") if hasattr(state.ft_test_result, "to_dict") else (state.ft_test_result if isinstance(state.ft_test_result, list) else []),
                 }
             }
         except Exception as e:
