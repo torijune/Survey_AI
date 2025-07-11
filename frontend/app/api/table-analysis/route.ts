@@ -11,6 +11,7 @@ export async function POST(req: NextRequest) {
     const selectedKey = formData.get("selected_key")?.toString() || "";
     const lang = formData.get("lang")?.toString() || "한국어";
     const userId = formData.get("user_id")?.toString() || "";
+    const useStatisticalTest = formData.get("use_statistical_test")?.toString() || "true";
 
     if (!file) {
       return NextResponse.json({ error: "파일이 필요합니다." }, { status: 400 });
@@ -29,6 +30,7 @@ export async function POST(req: NextRequest) {
       backendForm.append("selected_key", selectedKey);
       backendForm.append("lang", lang);
       backendForm.append("user_id", userId);
+      backendForm.append("use_statistical_test", useStatisticalTest);
       if (formData.get("analysis_type") === "batch" && formData.get("batch_test_types")) {
         backendForm.append("analysis_type", "batch");
         backendForm.append("batch_test_types", formData.get("batch_test_types")!.toString());
@@ -39,6 +41,7 @@ export async function POST(req: NextRequest) {
       backendForm.append("analysis_type", "recommend_test_types");
       backendForm.append("lang", lang);
       backendForm.append("user_id", userId);
+      backendForm.append("use_statistical_test", useStatisticalTest);
     } else {
       // 테이블 파싱만
       backendApi = `${backendUrl}/api/table-parse`;

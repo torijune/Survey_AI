@@ -743,29 +743,6 @@ export default function DashboardPage() {
         </TabsContent>
 
         <TabsContent value="fgi-analyses">
-          {/* FGI RAG 세션 카드 목록 */}
-          <div className="mb-8">
-            <h2 className="text-xl font-bold mb-4">FGI RAG 대화 세션</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {ragSessions.length === 0 && <div className="text-gray-500">대화 세션이 없습니다.</div>}
-              {ragSessions.map((session) => (
-                <Card key={session.chat_group_id} className="cursor-pointer hover:shadow-lg transition" onClick={() => router.push(`/FGI-analysis?file_id=${session.file_id}&chat_group_id=${session.chat_group_id}`)}>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <FileText className="h-5 w-5" /> 세션: {session.chat_group_id.slice(0, 8)}...<br/>
-                      <span className="text-xs text-gray-400">파일: {session.file_id}</span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-xs text-gray-500 mb-2">생성: {new Date(session.created_at).toLocaleString()}</div>
-                    <div className="text-xs text-gray-500 mb-2">최근: {new Date(session.last_updated).toLocaleString()}</div>
-                    <div className="text-sm text-gray-800 truncate">{session.last_role === 'user' ? '🙋‍♂️' : '🤖'} {session.last_message}</div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-          {/* 기존 FGI 분석 리스트 */}
           {fgiAnalyses.length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">
@@ -778,14 +755,14 @@ export default function DashboardPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {fgiAnalyses.map((analysis) => (
-                <Card key={analysis.id} className="hover:shadow-lg transition-shadow">
+                <Card key={analysis.id} className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => router.push(`/dashboard/fgi-analyses/${analysis.id}`)}>
                   <CardHeader>
                     <CardTitle className="text-lg flex items-center justify-between">
                       <span className="truncate">{analysis.title}</span>
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleDelete('fgi-analysis', analysis.id)}
+                        onClick={e => { e.stopPropagation(); handleDelete('fgi-analysis', analysis.id); }}
                         className="text-red-600 hover:text-red-800"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -799,7 +776,6 @@ export default function DashboardPage() {
                         <p className="text-sm text-gray-800 line-clamp-2">{analysis.description}</p>
                       </div>
                     )}
-                    
                     {/* 파일 정보 */}
                     <div className="space-y-2">
                       {analysis.audio_files_count > 0 && (
@@ -827,13 +803,12 @@ export default function DashboardPage() {
                         </div>
                       )}
                     </div>
-                    
                     <div className="flex items-center text-xs text-gray-500">
                       <Calendar className="h-3 w-3 mr-1" />
                       {formatDate(analysis.created_at)}
                     </div>
                     <div className="flex gap-2">
-                      <Link href={`/dashboard/fgi-analyses/${analysis.id}`}>
+                      <Link href={`/dashboard/fgi-analyses/${analysis.id}`} onClick={e => e.stopPropagation()}>
                         <Button size="sm" variant="outline" className="flex-1">
                           <Eye className="h-3 w-3 mr-1" />
                           {TEXT.view[lang]}

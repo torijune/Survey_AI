@@ -16,6 +16,9 @@ import LanguageSwitcher from '@/components/LanguageSwitcher';
 import { useLanguage } from '@/components/LanguageContext';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { supabase } from '@/lib/supabaseClient';
+import * as XLSX from "xlsx";
+import { Document, Packer, Paragraph, TextRun } from "docx";
+import { saveAs } from "file-saver";
 
 interface SurveyData {
   questionKeys: string[];
@@ -58,6 +61,25 @@ const EXAMPLE_ANALYSIS_STEPS = [
   { key: 'polishing', label: '문장 다듬기', status: 'done', result: 'IT 업계 종사자에서 재택근무 선호가 두드러졌으며, 다른 변수에서는 뚜렷한 차이가 관찰되지 않았음.' },
 ];
 
+function customSort(keys: string[]) {
+  return keys.slice().sort((a, b) => {
+    const parse = (k: string): [string, number, number] => {
+      const match = k.match(/^([A-Z]+)(\d+)?(?:_(\d+))?/);
+      if (!match) return [k, 0, 0];
+      return [
+        match[1] || '',
+        match[2] ? parseInt(match[2], 10) : 0,
+        match[3] ? parseInt(match[3], 10) : 0
+      ];
+    };
+    const [aAlpha, aNum, aSub] = parse(a);
+    const [bAlpha, bNum, bSub] = parse(b);
+    if (String(aAlpha) !== String(bAlpha)) return String(aAlpha).localeCompare(String(bAlpha));
+    if (Number(aNum) !== Number(bNum)) return Number(aNum) - Number(bNum);
+    return Number(aSub) - Number(bSub);
+  });
+}
+
 export default function TableAnalysisPage() {
   const { lang } = useLanguage();
   const { user, loading: authLoading } = useAuth('/table-analysis');
@@ -73,6 +95,9 @@ export default function TableAnalysisPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [analysisType, setAnalysisType] = useState<'single' | 'batch'>('single');
+  
+  // 통계 검정 유무 선택 상태 추가
+  const [useStatisticalTest, setUseStatisticalTest] = useState<boolean>(true);
 
   // 전체 분석용 임시 상태 (질문별 통계 검정 방법)
   const [batchTestTypes, setBatchTestTypes] = useState<{ [key: string]: string }>({});
@@ -102,26 +127,36 @@ export default function TableAnalysisPage() {
           formData.append("file", uploadedFile);
           formData.append("analysis_type", "recommend_test_types");
           formData.append("lang", lang);
+          formData.append("use_statistical_test", useStatisticalTest.toString());
           const response = await fetch("/api/table-analysis", {
             method: "POST",
             body: formData,
           });
           const data = await response.json();
           if (data.success && data.test_type_map) {
-            setBatchTestTypes(data.test_type_map);
+            // 통계 검정 미사용 시 모든 질문을 manual로 설정
+            if (!useStatisticalTest) {
+              const manualMap: { [key: string]: string } = {};
+              surveyData.questionKeys.forEach((key) => {
+                manualMap[key] = 'manual';
+              });
+              setBatchTestTypes(manualMap);
+            } else {
+              setBatchTestTypes(data.test_type_map);
+            }
           } else {
-            // fallback: 모두 ft_test
+            // fallback: 통계 검정 사용 시 ft_test, 미사용 시 manual
             const initial: { [key: string]: string } = {};
             surveyData.questionKeys.forEach((key) => {
-              initial[key] = 'ft_test';
+              initial[key] = useStatisticalTest ? 'ft_test' : 'manual';
             });
             setBatchTestTypes(initial);
           }
         } catch (e) {
-          // fallback: 모두 ft_test
+          // fallback: 통계 검정 사용 시 ft_test, 미사용 시 manual
           const initial: { [key: string]: string } = {};
           surveyData.questionKeys.forEach((key) => {
-            initial[key] = 'ft_test';
+            initial[key] = useStatisticalTest ? 'ft_test' : 'manual';
           });
           setBatchTestTypes(initial);
         } finally {
@@ -131,7 +166,7 @@ export default function TableAnalysisPage() {
     };
     fetchRecommendedTestTypes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisType, surveyData, uploadedFile, lang]);
+  }, [analysisType, surveyData, uploadedFile, lang, useStatisticalTest]);
 
   const onDrop = useCallback(async (acceptedFiles: File[], type: 'table' | 'raw') => {
     if (acceptedFiles.length === 0) return;
@@ -206,6 +241,8 @@ export default function TableAnalysisPage() {
       formData.append("selected_key", selectedQuestion);
       formData.append("lang", lang);
       formData.append("user_id", user?.id || "");
+      // 통계 검정 유무 파라미터 추가
+      formData.append("use_statistical_test", useStatisticalTest.toString());
       const response = await fetch("/api/table-analysis", {
         method: "POST",
         body: formData,
@@ -254,6 +291,8 @@ export default function TableAnalysisPage() {
       formData.append("user_id", user?.id || "");
       formData.append("batch_test_types", JSON.stringify(batchTestTypes));
       formData.append("file_name", uploadedFile.name);
+      // 통계 검정 유무 파라미터 추가
+      formData.append("use_statistical_test", useStatisticalTest.toString());
       // batch-analyze API 호출
       const response = await fetch("/api/batch-analyze", {
         method: "POST",
@@ -549,6 +588,85 @@ export default function TableAnalysisPage() {
     );
   }
 
+  // 대시보드 저장, 엑셀, docs export 핸들러 추가
+  const handleExportExcel = () => {
+    if (!batchStatus.length) return;
+    const wb = XLSX.utils.book_new();
+    // customSort로 정렬된 순서대로 저장
+    const sortedKeys = surveyData ? customSort(surveyData.questionKeys) : customSort(batchStatus.map(row => row.question_key));
+    sortedKeys.forEach(key => {
+      const row = batchStatus.find(r => r.question_key === key);
+      if (row && row.result && Array.isArray(row.result.ft_test_result)) {
+        const ws = XLSX.utils.json_to_sheet(row.result.ft_test_result);
+        XLSX.utils.book_append_sheet(wb, ws, key.slice(0, 31));
+      }
+    });
+    XLSX.writeFile(wb, "batch_analysis_results.xlsx");
+  };
+
+  const handleExportDocs = () => {
+    if (!batchStatus.length) return;
+    // customSort로 정렬된 순서대로 저장
+    const sortedKeys = surveyData ? customSort(surveyData.questionKeys) : customSort(batchStatus.map(row => row.question_key));
+    const children = sortedKeys.flatMap(key => {
+      const row = batchStatus.find(r => r.question_key === key);
+      return [
+        new Paragraph({ text: key, heading: "Heading1" }),
+        new Paragraph(row?.result?.polishing_result || ""),
+        new Paragraph("")
+      ];
+    });
+    const doc = new Document({
+      sections: [{ children }]
+    });
+    Packer.toBlob(doc).then(blob => saveAs(blob, "batch_analysis_summaries.docx"));
+  };
+
+  const handleSaveBatchToDashboard = async () => {
+    if (!batchJobId) return;
+    const res = await fetch(`/api/batch-download?job_id=${batchJobId}`);
+    const data = await res.json();
+    // 세션 등 인증 필요시 supabase 등에서 access_token 받아와야 함
+    // 아래는 예시
+    // const { data: { session } } = await supabase.auth.getSession();
+    await fetch('/api/survey-analyses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: `Batch 분석 결과 - ${batchJobId}`,
+        description: '',
+        analysis_result: data,
+        // 기타 메타데이터
+      })
+    });
+    alert('대시보드에 저장되었습니다!');
+  };
+
+  // 단일 분석 엑셀/Docs export 핸들러 추가
+  const handleExportSingleExcel = () => {
+    if (!analysisResult || typeof analysisResult !== 'object' || !selectedQuestion) return;
+    const wb = XLSX.utils.book_new();
+    if (analysisResult.ft_test_result && Array.isArray(analysisResult.ft_test_result)) {
+      const ws = XLSX.utils.json_to_sheet(analysisResult.ft_test_result);
+      XLSX.utils.book_append_sheet(wb, ws, selectedQuestion.slice(0, 31));
+    }
+    XLSX.writeFile(wb, `analysis_result_${selectedQuestion}.xlsx`);
+  };
+
+  const handleExportSingleDocs = () => {
+    if (!analysisResult || typeof analysisResult !== 'object' || !selectedQuestion) return;
+    const doc = new Document({
+      sections: [{
+        children: [
+          new Paragraph({ text: selectedQuestion, heading: "Heading1" }),
+          new Paragraph(analysisResult.polishing_result || ""),
+          new Paragraph("")
+        ]
+      }]
+    });
+    Packer.toBlob(doc).then(blob => saveAs(blob, `analysis_summary_${selectedQuestion}.docx`));
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -597,6 +715,57 @@ export default function TableAnalysisPage() {
             전체 분석: 모든 질문에 대해 일괄 분석
           </div>
         </div>
+        
+        {/* 통계 검정 유무 선택 */}
+        <div className="mb-6">
+          <Label className="block mb-2 font-semibold">통계 검정 사용 여부</Label>
+          <div className="flex gap-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="useStatisticalTest"
+                value="true"
+                checked={useStatisticalTest === true}
+                onChange={() => {
+                  setUseStatisticalTest(true);
+                  // 통계 검정 사용 시 기존 test_type 유지하거나 ft_test로 설정
+                  if (surveyData && analysisType === 'batch') {
+                    const updatedTypes: { [key: string]: string } = {};
+                    surveyData.questionKeys.forEach((key) => {
+                      updatedTypes[key] = batchTestTypes[key] === 'manual' ? 'ft_test' : batchTestTypes[key];
+                    });
+                    setBatchTestTypes(updatedTypes);
+                  }
+                }}
+              />
+              통계 검정 사용
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="useStatisticalTest"
+                value="false"
+                checked={useStatisticalTest === false}
+                onChange={() => {
+                  setUseStatisticalTest(false);
+                  // 통계 검정 미사용 시 모든 질문을 manual로 설정
+                  if (surveyData && analysisType === 'batch') {
+                    const manualMap: { [key: string]: string } = {};
+                    surveyData.questionKeys.forEach((key) => {
+                      manualMap[key] = 'manual';
+                    });
+                    setBatchTestTypes(manualMap);
+                  }
+                }}
+              />
+              통계 검정 미사용
+            </label>
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            통계 검정 사용: Raw Data를 활용한 통계 분석 포함 (ft_test, chi_square, manual 중 선택)<br/>
+            통계 검정 미사용: Manual 통계 검정만 강제 실행 (Raw Data 불필요)
+          </div>
+        </div>
         {/* 통계표 업로드 */}
         <Card className="mb-6">
           <CardHeader>
@@ -622,31 +791,33 @@ export default function TableAnalysisPage() {
             <p className="text-xs text-gray-500 mt-2">엑셀(.xlsx, .xls), CSV, JSON 지원</p>
           </CardContent>
         </Card>
-        {/* Raw Data 업로드 */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <FileText className="mr-2 h-5 w-5" />
-              원시 데이터 Excel 파일 업로드 (Raw DATA, DEMO 등)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div {...getRawRootProps()} className={`mt-2 border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${isRawDragActive ? "border-blue-500 bg-blue-50 dark:bg-blue-900" : "border-gray-300 hover:border-gray-400 dark:border-gray-600"}`}>
-              <input {...getRawInputProps()} />
-              <FileText className="mx-auto h-8 w-8 text-gray-400 mb-2" />
-              <p className="text-sm text-gray-600 dark:text-gray-300">
-                {isRawDragActive ? "여기에 파일을 드래그하거나 클릭하여 선택하세요." : "원시 데이터 Excel 파일을 선택하세요 (최대 200MB)"}
-              </p>
-            </div>
-            {uploadedRawDataFile && (
-              <div className="mt-3 flex items-center gap-2 text-green-700 dark:text-green-300">
-                <CheckCircle className="h-4 w-4" />
-                <span className="text-sm">{uploadedRawDataFile.name}</span>
+        {/* Raw Data 업로드 - 통계 검정 사용 시에만 표시 */}
+        {useStatisticalTest && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <FileText className="mr-2 h-5 w-5" />
+                원시 데이터 Excel 파일 업로드 (Raw DATA, DEMO 등)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div {...getRawRootProps()} className={`mt-2 border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition-colors ${isRawDragActive ? "border-blue-500 bg-blue-50 dark:bg-blue-900" : "border-gray-300 hover:border-gray-400 dark:border-gray-600"}`}>
+                <input {...getRawInputProps()} />
+                <FileText className="mx-auto h-8 w-8 text-gray-400 mb-2" />
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  {isRawDragActive ? "여기에 파일을 드래그하거나 클릭하여 선택하세요." : "원시 데이터 Excel 파일을 선택하세요 (최대 200MB)"}
+                </p>
               </div>
-            )}
-            <p className="text-xs text-gray-500 mt-2">엑셀(.xlsx, .xls)만 지원, DATA/DEMO 시트 포함</p>
-          </CardContent>
-        </Card>
+              {uploadedRawDataFile && (
+                <div className="mt-3 flex items-center gap-2 text-green-700 dark:text-green-300">
+                  <CheckCircle className="h-4 w-4" />
+                  <span className="text-sm">{uploadedRawDataFile.name}</span>
+                </div>
+              )}
+              <p className="text-xs text-gray-500 mt-2">엑셀(.xlsx, .xls)만 지원, DATA/DEMO 시트 포함</p>
+            </CardContent>
+          </Card>
+        )}
         {/* 저장 */}
         {analysisResult && (
           <Card className="mt-4">
@@ -790,7 +961,7 @@ export default function TableAnalysisPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {surveyData.questionKeys.map((key) => (
+                    {customSort(surveyData.questionKeys).map((key) => (
                       <tr key={key}>
                         <td className="px-2 py-1 border text-center font-mono">{key}</td>
                         <td className="px-2 py-1 border text-left">{surveyData.questionTexts[key]}</td>
@@ -902,6 +1073,11 @@ export default function TableAnalysisPage() {
                 <ListChecks className="mr-2 h-5 w-5" />
                 분석 단계별 결과
               </CardTitle>
+              {/* 단일 분석 export 버튼 */}
+              <div className="flex gap-2 mt-2">
+                <Button size="sm" variant="outline" onClick={handleExportSingleExcel} title="엑셀로 내보내기">🟩</Button>
+                <Button size="sm" variant="outline" onClick={handleExportSingleDocs} title="Docs로 내보내기">📄</Button>
+              </div>
             </CardHeader>
             <CardContent>
               {renderStepwiseResult(analysisResult)}
@@ -930,6 +1106,12 @@ export default function TableAnalysisPage() {
                 <ListChecks className="mr-2 h-5 w-5" />
                 전체 분석 진행상황
               </CardTitle>
+              {/* export/dash 저장 버튼 추가 */}
+              <div className="flex gap-2 mt-2">
+                <Button size="sm" variant="outline" onClick={handleExportExcel} title="엑셀로 내보내기">🟩</Button>
+                <Button size="sm" variant="outline" onClick={handleExportDocs} title="Docs로 내보내기">📄</Button>
+                <Button size="sm" variant="outline" onClick={handleSaveBatchToDashboard} title="대시보드에 저장">💾</Button>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="mb-2 text-xs text-gray-500 flex items-center gap-2">
@@ -972,41 +1154,69 @@ export default function TableAnalysisPage() {
                 </div>
               )}
               <div className="overflow-x-auto">
-                <table className="min-w-[400px] text-xs border rounded bg-white dark:bg-gray-900">
+                <table className="min-w-[900px] text-xs border rounded bg-white dark:bg-gray-900">
                   <thead>
                     <tr>
                       <th className="px-2 py-1 border text-center">질문 키</th>
                       <th className="px-2 py-1 border text-center">상태</th>
-                      <th className="px-2 py-1 border text-center">결과/에러</th>
+                      <th className="px-2 py-1 border text-center min-w-[300px] max-w-[600px]">결과/에러</th>
                       <th className="px-2 py-1 border text-center">업데이트 시각</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {batchStatus.map((row, i) => (
-                      <tr key={row.question_key || i}>
-                        <td className="px-2 py-1 border text-center font-mono">{row.question_key}</td>
-                        <td className="px-2 py-1 border text-center">
-                          {row.status === "pending" && <span className="text-gray-500">대기중</span>}
-                          {row.status === "running" && <span className="text-blue-600">진행중</span>}
-                          {row.status === "done" && <span className="text-green-600">완료</span>}
-                          {row.status === "error" && <span className="text-red-600">에러</span>}
-                        </td>
-                        <td className="px-2 py-1 border text-left max-w-xs break-all">
-                          {row.status === "done" && row.result && (
-                            <details>
-                              <summary className="cursor-pointer text-blue-700">결과 보기</summary>
-                              <pre className="bg-gray-50 rounded p-2 text-xs whitespace-pre-wrap">{JSON.stringify(row.result, null, 2)}</pre>
-                            </details>
-                          )}
-                          {row.status === "error" && (
-                            <span className="text-red-600">{row.error}</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1 border text-center">
-                          {row.updated_at ? new Date(row.updated_at).toLocaleString() : "-"}
-                        </td>
-                      </tr>
-                    ))}
+                    {customSort(batchStatus.map(r => r.question_key)).map((key, i) => {
+                      const row = batchStatus.find(r => r.question_key === key);
+                      if (!row) return null;
+                      return (
+                        <tr key={row.question_key || i}>
+                          <td className="px-2 py-1 border text-center font-mono">{row.question_key}</td>
+                          <td className="px-2 py-1 border text-center">
+                            {row.status === "pending" && <span className="text-gray-500">대기중</span>}
+                            {row.status === "running" && <span className="text-blue-600">진행중</span>}
+                            {row.status === "done" && <span className="text-green-600">완료</span>}
+                            {row.status === "error" && <span className="text-red-600">에러</span>}
+                          </td>
+                          <td className="px-2 py-1 border text-left min-w-[300px] max-w-[600px] break-all">
+                            {row.status === "done" && row.result && (
+                              <details>
+                                <summary className="cursor-pointer text-blue-700">결과 보기</summary>
+                                {/* 통계 검정 결과 표 */}
+                                {row.result.ft_test_result && Array.isArray(row.result.ft_test_result) && row.result.ft_test_result.length > 0 && (
+                                  <table className="min-w-[320px] text-xs border rounded bg-white dark:bg-gray-900 mt-2 mb-2">
+                                    <thead>
+                                      <tr>
+                                        {Object.keys(row.result.ft_test_result[0]).map((col) => (
+                                          <th key={col} className="px-2 py-1 border text-center font-semibold">{col}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {row.result.ft_test_result.map((r: any, i: number) => (
+                                        <tr key={i}>
+                                          {Object.values(r).map((cell: any, j: number) => (
+                                            <td key={j} className="px-2 py-1 border text-center">{cell}</td>
+                                          ))}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                                {/* 최종 요약문 */}
+                                {row.result.polishing_result && (
+                                  <div className="mt-2 p-2 bg-gray-50 rounded text-sm whitespace-pre-wrap">{row.result.polishing_result}</div>
+                                )}
+                              </details>
+                            )}
+                            {row.status === "error" && (
+                              <span className="text-red-600">{row.error}</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1 border text-center">
+                            {row.updated_at ? new Date(row.updated_at).toLocaleString() : "-"}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

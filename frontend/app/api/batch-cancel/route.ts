@@ -13,8 +13,8 @@ export async function POST(req: NextRequest) {
 
     const backendUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
     
-    // 백엔드 배치 취소 API 호출
-    const response = await fetch(`${backendUrl}/api/batch-cancel`, {
+    // 백엔드 배치 취소 API 호출 (Clean Architecture)
+    const response = await fetch(`${backendUrl}/api/v1/batch-analysis/cancel`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

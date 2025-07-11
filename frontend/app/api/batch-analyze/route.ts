@@ -25,8 +25,8 @@ export async function POST(req: NextRequest) {
     backendForm.append("batch_test_types", batchTestTypes);
     backendForm.append("file_name", fileName);
 
-    // 백엔드 배치 분석 API 호출
-    const response = await fetch(`${backendUrl}/api/batch-analyze`, {
+    // 백엔드 배치 분석 API 호출 (Clean Architecture)
+    const response = await fetch(`${backendUrl}/api/v1/batch-analysis/start`, {
       method: "POST",
       body: backendForm,
     });
