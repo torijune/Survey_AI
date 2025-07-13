@@ -291,6 +291,10 @@ export default function DashboardPage() {
     setTimeout(() => setCopySuccessQA(null), 1200);
   }
 
+  // 분석 데이터 분리
+  const batchAnalyses = analyses.filter(a => a.analysis_result?.analysisMetadata?.analysisType === 'batch');
+  const singleAnalyses = analyses.filter(a => a.analysis_result?.analysisMetadata?.analysisType !== 'batch');
+
   if (authLoading) {
     return (
       <div className="w-full max-w-screen-xl px-8 py-12 mx-auto dark:bg-gray-900 dark:text-gray-100">
@@ -573,9 +577,9 @@ export default function DashboardPage() {
         </TabsContent>
 
         <TabsContent value="analyses" className="mt-6">
-          {analyses.length === 0 ? (
+          {singleAnalyses.length === 0 && batchAnalyses.length === 0 ? (
             <Card>
-                            <CardContent className="p-8 text-center">
+              <CardContent className="p-8 text-center">
                 <p className="text-gray-500">{TEXT.no_data[lang]}</p>
                 <Link href="/table-analysis">
                   <Button className="mt-4">첫 번째 설문 분석하기</Button>
@@ -583,97 +587,154 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {analyses.map((analysis) => (
-                <Card key={analysis.id} className="hover:shadow-lg transition-shadow">
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center justify-between">
-                      <span className="truncate">{analysis.title}</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDelete('analysis', analysis.id)}
-                        className="text-red-600 hover:text-red-800"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {analysis.description && (
-                      <div>
-                        <p className="text-sm font-medium text-gray-600">{TEXT.description[lang]}</p>
-                        <p className="text-sm text-gray-800 line-clamp-2">{analysis.description}</p>
-                      </div>
-                    )}
-                    {analysis.uploaded_file_name && (
-                      <div>
-                        <p className="text-sm font-medium text-gray-600">{TEXT.file_name[lang]}</p>
-                        <p className="text-sm text-gray-800 truncate">{analysis.uploaded_file_name}</p>
-                      </div>
-                    )}
-                    
-                    {/* 분석 상태 정보 */}
-                    {analysis.analysis_result && (
-                      <div className="space-y-2">
-                        {/* 분석 유형 */}
-                        {analysis.analysis_result.analysisMetadata?.analysisType && (
-                          <div className="flex items-center">
-                            <div className={`w-2 h-2 rounded-full mr-2 ${
-                              analysis.analysis_result.analysisMetadata.analysisType === 'single' ? 'bg-blue-500' : 'bg-orange-500'
-                            }`} />
-                            <span className="text-xs text-gray-600">
-                              {analysis.analysis_result.analysisMetadata.analysisType === 'single' ? TEXT.single_analysis[lang] : TEXT.batch_analysis[lang]}
-                            </span>
-                          </div>
-                        )}
-                        
-                        {/* 통계 결과 여부 */}
-                        {analysis.analysis_result.statisticalResults && (
-                          <div className="flex items-center">
-                            <CheckCircle className="w-3 h-3 text-green-500 mr-1" />
-                            <span className="text-xs text-gray-600">{TEXT.statistical_results[lang]}</span>
-                          </div>
-                        )}
-                        
-                        {/* 워크플로우 단계 수 */}
-                        {analysis.analysis_result.workflowSteps?.length > 0 && (
-                          <div className="flex items-center">
-                            <BarChart3 className="w-3 h-3 text-purple-500 mr-1" />
-                            <span className="text-xs text-gray-600">
-                              {TEXT.workflow_steps[lang]}: {analysis.analysis_result.workflowSteps.length}단계
-                            </span>
-                          </div>
-                        )}
-                        
-                        {/* 일괄 분석 정보 */}
-                        {analysis.analysis_result.batchInfo && (
-                          <div className="flex items-center">
-                            <TrendingUp className="w-3 h-3 text-orange-500 mr-1" />
-                            <span className="text-xs text-gray-600">
-                              {analysis.analysis_result.batchInfo.analyzedQuestions}개 문항 분석
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    
-                    <div className="flex items-center text-xs text-gray-500">
-                      <Calendar className="h-3 w-3 mr-1" />
-                      {formatDate(analysis.created_at)}
-                    </div>
-                    <div className="flex gap-2">
-                      <Link href={`/dashboard/analyses/${analysis.id}`}>
-                        <Button size="sm" variant="outline" className="flex-1">
-                          <Eye className="h-3 w-3 mr-1" />
-                          {TEXT.view[lang]}
+            <>
+              {/* 단일 분석 카드 */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {singleAnalyses.map((analysis) => (
+                  <Card key={analysis.id} className="hover:shadow-lg transition-shadow">
+                    <CardHeader>
+                      <CardTitle className="text-lg flex items-center justify-between">
+                        <span className="truncate">{analysis.title}</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDelete('analysis', analysis.id)}
+                          className="text-red-600 hover:text-red-800"
+                        >
+                          <Trash2 className="h-4 w-4" />
                         </Button>
-                      </Link>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {analysis.description && (
+                        <div>
+                          <p className="text-sm font-medium text-gray-600">{TEXT.description[lang]}</p>
+                          <p className="text-sm text-gray-800 line-clamp-2">{analysis.description}</p>
+                        </div>
+                      )}
+                      {analysis.uploaded_file_name && (
+                        <div>
+                          <p className="text-sm font-medium text-gray-600">{TEXT.file_name[lang]}</p>
+                          <p className="text-sm text-gray-800 truncate">{analysis.uploaded_file_name}</p>
+                        </div>
+                      )}
+                      {/* 분석 상태 정보 */}
+                      {analysis.analysis_result && (
+                        <div className="space-y-2">
+                          {/* 분석 유형 */}
+                          {analysis.analysis_result.analysisMetadata?.analysisType && (
+                            <div className="flex items-center">
+                              <div className={`w-2 h-2 rounded-full mr-2 ${
+                                analysis.analysis_result.analysisMetadata.analysisType === 'single' ? 'bg-blue-500' : 'bg-orange-500'
+                              }`} />
+                              <span className="text-xs text-gray-600">
+                                {analysis.analysis_result.analysisMetadata.analysisType === 'single' ? TEXT.single_analysis[lang] : TEXT.batch_analysis[lang]}
+                              </span>
+                            </div>
+                          )}
+                          
+                          {/* 통계 결과 여부 */}
+                          {analysis.analysis_result.statisticalResults && (
+                            <div className="flex items-center">
+                              <CheckCircle className="w-3 h-3 text-green-500 mr-1" />
+                              <span className="text-xs text-gray-600">{TEXT.statistical_results[lang]}</span>
+                            </div>
+                          )}
+                          
+                          {/* 워크플로우 단계 수 */}
+                          {analysis.analysis_result.workflowSteps?.length > 0 && (
+                            <div className="flex items-center">
+                              <BarChart3 className="w-3 h-3 text-purple-500 mr-1" />
+                              <span className="text-xs text-gray-600">
+                                {TEXT.workflow_steps[lang]}: {analysis.analysis_result.workflowSteps.length}단계
+                              </span>
+                            </div>
+                          )}
+                          
+                          {/* 일괄 분석 정보 */}
+                          {analysis.analysis_result.batchInfo && (
+                            <div className="flex items-center">
+                              <TrendingUp className="w-3 h-3 text-orange-500 mr-1" />
+                              <span className="text-xs text-gray-600">
+                                {analysis.analysis_result.batchInfo.analyzedQuestions}개 문항 분석
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center text-xs text-gray-500">
+                        <Calendar className="h-3 w-3 mr-1" />
+                        {formatDate(analysis.created_at)}
+                      </div>
+                      <div className="flex gap-2">
+                        <Link href={`/dashboard/analyses/${analysis.id}`}>
+                          <Button size="sm" variant="outline" className="flex-1">
+                            <Eye className="h-3 w-3 mr-1" />
+                            {TEXT.view[lang]}
+                          </Button>
+                        </Link>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+              {/* 전체 분석(배치 분석) 카드 */}
+              {batchAnalyses.length > 0 && (
+                <>
+                  <h3 className="text-xl font-bold mt-10 mb-4">전체 분석</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {batchAnalyses.map((analysis) => (
+                      <Card key={analysis.id} className="hover:shadow-lg transition-shadow">
+                        <CardHeader>
+                          <CardTitle className="text-lg flex items-center justify-between">
+                            <span className="truncate">{analysis.title || '전체 분석'}</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDelete('analysis', analysis.id)}
+                              className="text-red-600 hover:text-red-800"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {analysis.description && (
+                            <div>
+                              <p className="text-sm font-medium text-gray-600">{TEXT.description[lang]}</p>
+                              <p className="text-sm text-gray-800 line-clamp-2">{analysis.description}</p>
+                            </div>
+                          )}
+                          {analysis.uploaded_file_name && (
+                            <div>
+                              <p className="text-sm font-medium text-gray-600">{TEXT.file_name[lang]}</p>
+                              <p className="text-sm text-gray-800 truncate">{analysis.uploaded_file_name}</p>
+                            </div>
+                          )}
+                          <div>
+                            <span className="text-xs text-gray-600">문항 수: </span>
+                            <span className="text-xs font-bold">{analysis.analysis_result?.results?.length || 0}</span>
+                          </div>
+                          <div className="flex items-center text-xs text-gray-500">
+                            <Calendar className="h-3 w-3 mr-1" />
+                            {formatDate(analysis.created_at)}
+                          </div>
+                          <div className="flex gap-2">
+                            <Link href={`/dashboard/analyses/${analysis.id}`}>
+                              <Button size="sm" variant="outline" className="flex-1">
+                                <Eye className="h-3 w-3 mr-1" />
+                                자세히 보기
+                              </Button>
+                            </Link>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
           )}
         </TabsContent>
 

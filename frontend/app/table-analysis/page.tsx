@@ -110,6 +110,12 @@ export default function TableAnalysisPage() {
   const [logModalOpen, setLogModalOpen] = useState(false);
   const [batchLogs, setBatchLogs] = useState<any[]>([]);
 
+  // 전체 분석 저장 상태 관리
+  const [batchSaveTitle, setBatchSaveTitle] = useState("");
+  const [batchSaveDescription, setBatchSaveDescription] = useState("");
+  const [batchSaving, setBatchSaving] = useState(false);
+  const [batchSaved, setBatchSaved] = useState(false);
+
   // surveyData가 로드되면 첫번째 질문을 자동 선택
   useEffect(() => {
     if (surveyData && surveyData.questionKeys.length > 0 && !selectedQuestion) {
@@ -623,23 +629,48 @@ export default function TableAnalysisPage() {
   };
 
   const handleSaveBatchToDashboard = async () => {
-    if (!batchJobId) return;
-    const res = await fetch(`/api/batch-download?job_id=${batchJobId}`);
-    const data = await res.json();
-    // 세션 등 인증 필요시 supabase 등에서 access_token 받아와야 함
-    // 아래는 예시
-    // const { data: { session } } = await supabase.auth.getSession();
-    await fetch('/api/survey-analyses', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: `Batch 분석 결과 - ${batchJobId}`,
-        description: '',
-        analysis_result: data,
-        // 기타 메타데이터
-      })
-    });
-    alert('대시보드에 저장되었습니다!');
+    if (!batchJobId || !batchStatus.length || !batchSaveTitle.trim()) return;
+    setBatchSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('세션이 만료되었습니다.');
+      }
+      // 저장할 데이터 구성 (batchStatus 전체)
+      const analysisData = {
+        batchJobId,
+        results: batchStatus,
+        timestamp: new Date().toISOString(),
+        analysisMetadata: {
+          analysisType: "batch",
+          totalQuestions: batchStatus.length,
+          fileName: uploadedFile?.name || 'Unknown'
+        }
+      };
+      const response = await fetch('/api/survey-analyses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          title: batchSaveTitle.trim(),
+          description: batchSaveDescription.trim() || null,
+          uploaded_file_name: uploadedFile?.name || 'Unknown file',
+          analysis_result: analysisData
+        })
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || '저장 중 오류가 발생했습니다.');
+      }
+      setBatchSaved(true);
+      setTimeout(() => setBatchSaved(false), 2000);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '저장 중 오류가 발생했습니다.');
+    } finally {
+      setBatchSaving(false);
+    }
   };
 
   // 단일 분석 엑셀/Docs export 핸들러 추가
@@ -1110,10 +1141,61 @@ export default function TableAnalysisPage() {
               <div className="flex gap-2 mt-2">
                 <Button size="sm" variant="outline" onClick={handleExportExcel} title="엑셀로 내보내기">🟩</Button>
                 <Button size="sm" variant="outline" onClick={handleExportDocs} title="Docs로 내보내기">📄</Button>
-                <Button size="sm" variant="outline" onClick={handleSaveBatchToDashboard} title="대시보드에 저장">💾</Button>
               </div>
             </CardHeader>
             <CardContent>
+              {/* 대시보드 저장 UI (단일 분석과 동일) */}
+              <Card className="mb-6">
+                <CardHeader>
+                  <CardTitle className="flex items-center">
+                    <Save className="mr-2 h-5 w-5" />
+                    {lang === "한국어" ? "결과 저장" : "Save Results"}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <Label htmlFor="batchSaveTitle">제목</Label>
+                    <Input
+                      id="batchSaveTitle"
+                      value={batchSaveTitle}
+                      onChange={(e) => setBatchSaveTitle(e.target.value)}
+                      placeholder={lang === "한국어" ? "분석 제목을 입력하세요" : "Enter analysis title"}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="batchSaveDescription">설명 (선택사항)</Label>
+                    <Textarea
+                      id="batchSaveDescription"
+                      value={batchSaveDescription}
+                      onChange={(e) => setBatchSaveDescription(e.target.value)}
+                      placeholder={lang === "한국어" ? "분석에 대한 설명을 입력하세요" : "Enter analysis description"}
+                      rows={3}
+                    />
+                  </div>
+                  <Button 
+                    onClick={handleSaveBatchToDashboard} 
+                    disabled={!batchSaveTitle.trim() || batchSaving}
+                    className="w-full"
+                  >
+                    {batchSaving ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        {lang === "한국어" ? "저장 중..." : "Saving..."}
+                      </>
+                    ) : batchSaved ? (
+                      <>
+                        <CheckCircle className="mr-2 h-4 w-4" />
+                        {lang === "한국어" ? "저장됨" : "Saved"}
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-4 w-4" />
+                        {lang === "한국어" ? "저장" : "Save"}
+                      </>
+                    )}
+                  </Button>
+                </CardContent>
+              </Card>
               <div className="mb-2 text-xs text-gray-500 flex items-center gap-2">
                 Job ID: <span className="font-mono">{batchJobId || '-'}</span>
                 <Button size="sm" variant="outline" className="ml-2" onClick={handleDownloadBatch} disabled={!batchJobId} title="결과 다운로드">

@@ -51,11 +51,14 @@ interface SurveyAnalysis {
       selectedQuestion?: string;
       totalQuestions: number;
       fileNames: { rawDataFile: string };
+      useStatisticalTest?: boolean; // Added for statistical test usage
     };
     batchInfo?: {
       analyzedQuestions: number;
       analysisTypes: string[];
     };
+    results?: any[]; // Added for batch analysis results
+    question_texts?: { [key: string]: string }; // Added for question text mapping
   };
 }
 
@@ -172,6 +175,26 @@ export default function SurveyAnalysisDetailPage({ params }: { params: { id: str
     );
   };
 
+  // customSort 함수 추가 (table-analysis/page.tsx와 동일)
+  function customSort(keys: string[]) {
+    return keys.slice().sort((a, b) => {
+      const parse = (k: string): [string, number, number] => {
+        const match = k.match(/^([A-Z]+)(\d+)?(?:_(\d+))?/);
+        if (!match) return [k, 0, 0];
+        return [
+          match[1] || '',
+          match[2] ? parseInt(match[2], 10) : 0,
+          match[3] ? parseInt(match[3], 10) : 0
+        ];
+      };
+      const [aAlpha, aNum, aSub] = parse(a);
+      const [bAlpha, bNum, bSub] = parse(b);
+      if (String(aAlpha) !== String(bAlpha)) return String(aAlpha).localeCompare(String(bAlpha));
+      if (Number(aNum) !== Number(bNum)) return Number(aNum) - Number(bNum);
+      return Number(aSub) - Number(bSub);
+    });
+  }
+
   if (authLoading) {
     return (
       <div className="w-full max-w-screen-xl px-8 py-12 mx-auto">
@@ -286,6 +309,70 @@ export default function SurveyAnalysisDetailPage({ params }: { params: { id: str
 
         {/* 분석 결과 - 큰 메인 영역 */}
         <div className="lg:col-span-3 space-y-6">
+          {/* 배치(전체) 분석일 경우: 각 질문별 결과 렌더링 */}
+          {analysis.analysis_result?.analysisMetadata?.analysisType === 'batch' && Array.isArray(analysis.analysis_result.results) && analysis.analysis_result.results.length > 0 && (
+            <div className="space-y-6">
+              <h2 className="text-xl font-bold mb-4">전체 분석 결과 (문항별)</h2>
+              {/* 아코디언 UI로 정렬된 질문별 결과 */}
+              <div className="border rounded-lg divide-y bg-white">
+                {(() => {
+                  // customSort로 정렬된 key 순서대로
+                  const sortedKeys = customSort(analysis.analysis_result.results.map(q => q.question_key));
+                  return sortedKeys.map((key, idx) => {
+                    const q = analysis.analysis_result.results.find(q => q.question_key === key);
+                    if (!q) return null;
+                    // 질문명 추출 (question_texts가 있으면, 없으면 key만)
+                    const questionText = analysis.analysis_result.question_texts?.[key] || '';
+                    return (
+                      <details key={key} className="group">
+                        <summary className="flex items-center justify-between cursor-pointer px-4 py-3 hover:bg-gray-50">
+                          <span className="font-mono font-semibold">{key}</span>
+                          <span className="ml-2 text-sm text-gray-600 truncate">{questionText}</span>
+                          <span className="ml-auto text-gray-400 group-open:rotate-90 transition-transform">▶</span>
+                        </summary>
+                        <div className="px-6 py-4 bg-gray-50">
+                          {/* 요약문 */}
+                          {q.result?.polishing_result && (
+                            <div className="mb-2 p-2 bg-gray-100 rounded text-sm whitespace-pre-wrap">
+                              <span className="font-bold">요약:</span> {q.result.polishing_result}
+                            </div>
+                          )}
+                          {/* 통계 결과 표 */}
+                          {q.result?.ft_test_result && Array.isArray(q.result.ft_test_result) && q.result.ft_test_result.length > 0 && (
+                            <div className="overflow-x-auto border rounded-lg bg-white p-2 shadow-sm">
+                              <table className="min-w-[320px] text-xs border rounded bg-white mt-2 mb-2">
+                                <thead>
+                                  <tr>
+                                    {Object.keys(q.result.ft_test_result[0]).map((col) => (
+                                      <th key={col} className="px-2 py-1 border text-center font-semibold">{col}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {q.result.ft_test_result.map((row: any, i: number) => (
+                                    <tr key={i}>
+                                      {Object.values(row).map((cell: any, j: number) => (
+                                        <td key={j} className="px-2 py-1 border text-center">{cell}</td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                          {/* 에러 메시지 */}
+                          {q.status === 'error' && q.error && (
+                            <div className="p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700 mt-2">{q.error}</div>
+                          )}
+                        </div>
+                      </details>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          )}
+
           {analysis.analysis_result?.summary && renderExpandableContent(
             analysis.analysis_result.summary,
             'summary',
@@ -421,7 +508,10 @@ export default function SurveyAnalysisDetailPage({ params }: { params: { id: str
                     <span className="font-medium">총 질문 수:</span> {analysis.analysis_result.analysisMetadata.totalQuestions}개
                   </div>
                   <div>
-                    <span className="font-medium">원본 데이터 파일:</span> {analysis.analysis_result.analysisMetadata.fileNames.rawDataFile}
+                    <span className="font-medium">통계 검정 사용:</span> {typeof analysis.analysis_result.analysisMetadata.useStatisticalTest !== 'undefined' ? (analysis.analysis_result.analysisMetadata.useStatisticalTest ? '사용' : '미사용') : '-'}
+                  </div>
+                  <div>
+                    <span className="font-medium">원본 데이터 파일:</span> {analysis.analysis_result.analysisMetadata.fileNames?.rawDataFile ? analysis.analysis_result.analysisMetadata.fileNames.rawDataFile : '-'}
                   </div>
                   {analysis.analysis_result.batchInfo && (
                     <>
