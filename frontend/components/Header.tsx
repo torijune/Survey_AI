@@ -93,6 +93,12 @@ export default function Header() {
             >
               대시보드
             </Link>
+            <Link 
+              href="/editor" 
+              className="text-gray-600 hover:text-blue-600 transition-colors text-sm dark:text-gray-200 dark:hover:text-blue-400"
+            >
+              에디터
+            </Link>
           </nav>
         )}
       </div>

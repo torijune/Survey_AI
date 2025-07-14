@@ -23,7 +23,7 @@ class StatisticalTester:
     
     def extract_demo_mapping_from_dataframe(self, df: pd.DataFrame, column: str = "Unnamed: 0") -> Dict[str, str]:
         """데이터프레임에서 인구통계 매핑 추출"""
-        print(f"[extract_demo_mapping_from_dataframe] called with column: {column}")
+        print(f"[infra/statistics/extract_demo_mapping_from_dataframe] called with column: {column}")
         col = df[column].dropna().astype(str).reset_index(drop=True)
         print(f"[extract_demo_mapping_from_dataframe] col values: {col.tolist()}")
         cut_idx = None

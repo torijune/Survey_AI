@@ -346,6 +346,34 @@ export default function HomeDemo() {
               </Link>
             </CardContent>
           </Card>
+
+          {/* 에디터 */}
+          <Card className="hover:shadow-lg transition-shadow">
+          <CardHeader>
+          <CardTitle className="flex items-center">
+                <Users className="mr-2 h-6 w-6 text-orange-500" />
+                {lang === "한국어" ? "보고서 편집기" : "Report Editor"}
+              </CardTitle>
+              <CardDescription>
+                {lang === "한국어"
+                  ? "분석 결과를 통합 편집하여 최종 보고서를 편집합니다."
+                  : "영어로 수정 필요"}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-2 text-sm text-gray-600">
+                <li>• {lang === "한국어" ? "오디오/문서 업로드 및 STT 변환" : "Upload audio/documents & STT"}</li>
+                <li>• {lang === "한국어" ? "Q&A/길이 기반 청크 분할" : "Q&A or length-based chunking"}</li>
+                <li>• {lang === "한국어" ? "LLM 기반 좌담회 분석" : "LLM-based FGI analysis"}</li>
+                <li>• {lang === "한국어" ? "주제별/최종 요약 자동 생성" : "Auto topic/final summary"}</li>
+              </ul>
+              <Link href="/editor" className="mt-4 inline-block">
+              <Button variant="outline" size="sm">
+                {lang === "한국어" ? "보고서 편집" : "Start Report Editor"}
+              </Button>
+              </Link>
+            </CardContent>
+          </Card>
         </div>
 
         {/* LangGraph Implementation Section */}
