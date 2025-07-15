@@ -60,6 +60,8 @@ interface SurveyAnalysis {
     results?: any[]; // Added for batch analysis results
     question_texts?: { [key: string]: string }; // Added for question text mapping
   };
+  question?: string;
+  question_key?: string;
 }
 
 export default function SurveyAnalysisDetailPage({ params }: { params: { id: string } }) {
@@ -195,6 +197,22 @@ export default function SurveyAnalysisDetailPage({ params }: { params: { id: str
     });
   }
 
+  // summary 렌더링 함수
+  function renderSummary(summary: string | Record<string, any>) {
+    if (typeof summary === 'string') {
+      return <div className="text-gray-700 whitespace-pre-line">{summary}</div>;
+    }
+    if (summary?.polishing_result) {
+      return <div className="text-gray-700 whitespace-pre-line">{summary.polishing_result}</div>;
+    }
+    if (summary?.table_analysis) {
+      return <div className="text-gray-700 whitespace-pre-line">{summary.table_analysis}</div>;
+    }
+    return (
+      <pre className="text-xs text-gray-500 bg-gray-50 rounded p-2 overflow-x-auto">{JSON.stringify(summary, null, 2)}</pre>
+    );
+  }
+
   if (authLoading) {
     return (
       <div className="w-full max-w-screen-xl px-8 py-12 mx-auto">
@@ -310,24 +328,24 @@ export default function SurveyAnalysisDetailPage({ params }: { params: { id: str
         {/* 분석 결과 - 큰 메인 영역 */}
         <div className="lg:col-span-3 space-y-6">
           {/* 배치(전체) 분석일 경우: 각 질문별 결과 렌더링 */}
-          {analysis.analysis_result?.analysisMetadata?.analysisType === 'batch' && Array.isArray(analysis.analysis_result.results) && analysis.analysis_result.results.length > 0 && (
+          {analysis.analysis_result?.analysisMetadata?.analysisType === 'batch' && Array.isArray(analysis.analysis_result?.results) && analysis.analysis_result?.results.length > 0 && (
             <div className="space-y-6">
               <h2 className="text-xl font-bold mb-4">전체 분석 결과 (문항별)</h2>
               {/* 아코디언 UI로 정렬된 질문별 결과 */}
               <div className="border rounded-lg divide-y bg-white">
                 {(() => {
                   // customSort로 정렬된 key 순서대로
-                  const sortedKeys = customSort(analysis.analysis_result.results.map(q => q.question_key));
+                  const sortedKeys = customSort((analysis.analysis_result?.results ?? []).map(q => q.question_key));
                   return sortedKeys.map((key, idx) => {
-                    const q = analysis.analysis_result.results.find(q => q.question_key === key);
+                    const q = (analysis.analysis_result?.results ?? []).find(q => q.question_key === key);
                     if (!q) return null;
                     // 질문명 추출 (question_texts가 있으면, 없으면 key만)
-                    const questionText = analysis.analysis_result.question_texts?.[key] || '';
+                    const questionText = q.question || analysis.analysis_result?.question_texts?.[key] || '';
                     return (
                       <details key={key} className="group">
-                        <summary className="flex items-center justify-between cursor-pointer px-4 py-3 hover:bg-gray-50">
-                          <span className="font-mono font-semibold">{key}</span>
-                          <span className="ml-2 text-sm text-gray-600 truncate">{questionText}</span>
+                        <summary className="cursor-pointer text-blue-700 font-semibold flex items-center gap-2">
+                          <span className="font-mono text-xs">{q.question_key}</span>
+                          {questionText && <span className="text-xs text-gray-500 ml-2">{questionText}</span>}
                           <span className="ml-auto text-gray-400 group-open:rotate-90 transition-transform">▶</span>
                         </summary>
                         <div className="px-6 py-4 bg-gray-50">
@@ -373,10 +391,15 @@ export default function SurveyAnalysisDetailPage({ params }: { params: { id: str
             </div>
           )}
 
-          {analysis.analysis_result?.summary && renderExpandableContent(
-            analysis.analysis_result.summary,
-            'summary',
-            TEXT.summary[lang]
+          {analysis.analysis_result?.summary && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">{TEXT.summary[lang]}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {renderSummary(analysis.analysis_result.summary)}
+              </CardContent>
+            </Card>
           )}
 
           {analysis.analysis_result?.keyFindings && analysis.analysis_result.keyFindings.length > 0 && renderExpandableContent(
@@ -414,7 +437,10 @@ export default function SurveyAnalysisDetailPage({ params }: { params: { id: str
                   {analysis.analysis_result.statisticalResults.summary && (
                     <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
                       <p className="text-sm text-blue-800">
-                        <span className="font-medium">요약:</span> {analysis.analysis_result.statisticalResults.summary}
+                        <span className="font-medium">요약:</span>{' '}
+                        {typeof analysis.analysis_result.statisticalResults.summary === 'string'
+                          ? analysis.analysis_result.statisticalResults.summary
+                          : <pre className="text-xs text-blue-800 bg-blue-100 rounded p-2 overflow-x-auto inline-block align-middle">{JSON.stringify(analysis.analysis_result.statisticalResults.summary, null, 2)}</pre>}
                       </p>
                     </div>
                   )}
@@ -501,7 +527,7 @@ export default function SurveyAnalysisDetailPage({ params }: { params: { id: str
                   </div>
                   {analysis.analysis_result.analysisMetadata.selectedQuestion && (
                     <div>
-                      <span className="font-medium">선택된 질문:</span> {analysis.analysis_result.analysisMetadata.selectedQuestion}
+                      <span className="font-medium">선택된 질문:</span> {analysis.question || analysis.question_key}
                     </div>
                   )}
                   <div>

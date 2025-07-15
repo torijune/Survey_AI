@@ -32,6 +32,7 @@ class BatchAnalysisService:
                 request_data["file_name"]
             )
             question_keys = parsed_data["question_keys"]
+            question_texts = parsed_data.get("question_texts", {})
             
             # 4. 각 질문별로 결과 레코드 생성
             for key in question_keys:
@@ -40,6 +41,8 @@ class BatchAnalysisService:
                     question_key=key,
                     status="pending"
                 )
+                # question 필드도 포함
+                setattr(result, "question", question_texts.get(key, ""))
                 await self.repository.create_result(result)
             
             # 5. 비동기 분석 시작
@@ -63,6 +66,12 @@ class BatchAnalysisService:
     async def _analyze_questions_async(self, job_id: str, request_data: Dict[str, Any], question_keys: List[str]):
         """비동기로 모든 질문 분석 수행"""
         try:
+            # question_texts를 미리 파싱
+            parsed_data = await self.workflow.load_survey_tables(
+                request_data["file_content"], 
+                request_data["file_name"]
+            )
+            question_texts = parsed_data.get("question_texts", {})
             for key in question_keys:
                 # 이미 완료된 질문은 건너뛰기
                 existing_result = await self.repository.get_result(job_id, key)
@@ -95,13 +104,14 @@ class BatchAnalysisService:
                         raw_data_filename=request_data.get("raw_data_filename") if request_data.get("use_statistical_test", True) else None
                     )
                     
-                    # 결과 저장
+                    # 결과 저장 (question도 함께)
                     await self.repository.update_result(
                         job_id, 
                         key, 
                         "done", 
                         analysis_result.get("result"),
-                        None
+                        None,
+                        question_texts.get(key, "")
                     )
                     
                 except Exception as e:
@@ -111,7 +121,8 @@ class BatchAnalysisService:
                         key, 
                         "error", 
                         None, 
-                        str(e)
+                        str(e),
+                        question_texts.get(key, "")
                     )
             
             # 전체 작업 완료 시 상태 업데이트

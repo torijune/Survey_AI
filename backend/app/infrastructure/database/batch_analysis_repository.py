@@ -31,6 +31,7 @@ class BatchAnalysisRepository:
         self.supabase.table("batch_analysis_results").insert({
             "job_id": result.job_id,
             "question_key": result.question_key,
+            "question": getattr(result, "question", None),
             "status": result.status,
             "result": result.result,
             "error": result.error
@@ -60,7 +61,7 @@ class BatchAnalysisRepository:
             "updated_at": datetime.utcnow().isoformat()
         }).eq("job_id", job_id).eq("question_key", question_key).execute()
     
-    async def update_result(self, job_id: str, question_key: str, status: str, result: Any, error: Optional[str]) -> None:
+    async def update_result(self, job_id: str, question_key: str, status: str, result: Any, error: Optional[str], question: Optional[str] = None) -> None:
         """결과 업데이트"""
         update_data = {
             "status": status,
@@ -71,6 +72,8 @@ class BatchAnalysisRepository:
             update_data["result"] = result
         if error is not None:
             update_data["error"] = error
+        if question is not None:
+            update_data["question"] = question
         
         self.supabase.table("batch_analysis_results").update(update_data).eq("job_id", job_id).eq("question_key", question_key).execute()
     

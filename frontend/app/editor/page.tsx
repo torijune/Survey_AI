@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Bot, Edit3, Database, Folder, File, ChevronRight, ChevronDown, BarChart3, PieChart, Users, FileText, Calendar, CheckCircle, Eye, TrendingUp } from "lucide-react";
+import { Bot, Edit3, Database, Folder, File, ChevronRight, ChevronDown, BarChart3, PieChart, Users, FileText, Calendar, CheckCircle, Eye, TrendingUp, Workflow } from "lucide-react";
 import { useAuth } from '@/lib/hooks/useAuth';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -49,6 +49,98 @@ const CATEGORIES = [
   { key: 'visualizations', label: '시각화', icon: PieChart },
   { key: 'fgi', label: 'FGI 분석', icon: Users },
 ];
+
+function EditorAnalysisDetailView({ data }: { data: any }) {
+  // workflowSteps에서 '### 생성된 가설' 이후 텍스트 추출
+  const workflowHypotheses = (() => {
+    const steps = data.analysis_result?.workflowSteps || [];
+    const idx = steps.findIndex((s: string) => s.trim().startsWith('### 생성된 가설'));
+    if (idx >= 0) {
+      // 이후의 모든 줄을 합쳐서 줄바꿈 기준으로 분리
+      return steps.slice(idx + 1).join('\n').split('\n').map((s: string) => s.trim()).filter(Boolean);
+    }
+    return [];
+  })();
+  // 기존 keyFindings와 합침
+  const allHypotheses = [
+    ...(data.analysis_result?.keyFindings || []),
+    ...workflowHypotheses
+  ];
+  return (
+    <div className="max-w-3xl w-full mx-auto my-6 space-y-6">
+      {/* 질문 텍스트 맨 위에 노출 */}
+      {(data.question || data.question_key) && (
+        <Card className="p-4 rounded-xl shadow-lg">
+          <div className="font-semibold mb-2">질문</div>
+          <div className="text-gray-800 text-base">{data.question || data.question_key}</div>
+        </Card>
+      )}
+      {/* 요약 */}
+      {data.analysis_result?.summary && (
+        <Card className="p-6 rounded-xl shadow-lg">
+          <div className="font-semibold mb-2">요약</div>
+          {renderSummary(data.analysis_result.summary)}
+        </Card>
+      )}
+      {/* 통계 분석 결과 */}
+      {data.analysis_result?.statisticalResults && (
+        <Card className="p-6 rounded-xl shadow-lg">
+          <div className="font-semibold mb-2 flex items-center"><BarChart3 className="w-4 h-4 mr-1" />통계 분석 결과</div>
+          {data.analysis_result.statisticalResults.results && Array.isArray(data.analysis_result.statisticalResults.results) ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-3 py-2 border">대분류</th>
+                    <th className="px-3 py-2 border">통계량</th>
+                    <th className="px-3 py-2 border">p-value</th>
+                    <th className="px-3 py-2 border">유의성</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.analysis_result.statisticalResults.results.map((row: any, idx: number) => (
+                    <tr key={idx} className="border-b last:border-b-0 hover:bg-gray-50">
+                      <td className="px-3 py-2 font-medium">{row["대분류"] || ""}</td>
+                      <td className="px-3 py-2">{isNaN(row["통계량"]) ? "" : row["통계량"]}</td>
+                      <td className="px-3 py-2">{isNaN(row["p-value"]) ? "" : row["p-value"]}</td>
+                      <td className="px-3 py-2">
+                        <span className={`font-bold ${
+                          row["유의성"] === "***" ? "text-red-600" :
+                          row["유의성"] === "**" ? "text-orange-600" :
+                          row["유의성"] === "*" ? "text-yellow-600" : "text-gray-400"
+                        }`}>
+                          {row["유의성"] || ""}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <pre className="text-xs text-gray-500 bg-gray-50 rounded p-2 overflow-x-auto">{JSON.stringify(data.analysis_result.statisticalResults, null, 2)}</pre>
+          )}
+          {data.analysis_result.statisticalResults.error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg mt-2">
+              <p className="text-sm text-red-800">
+                <span className="font-medium">오류:</span> {data.analysis_result.statisticalResults.error}
+              </p>
+            </div>
+          )}
+        </Card>
+      )}
+      {/* 생성된 가설(주요 발견사항 + workflowSteps에서 추출) */}
+      {allHypotheses.length > 0 && (
+        <Card className="p-6 rounded-xl shadow-lg">
+          <div className="font-semibold mb-2">생성된 가설</div>
+          <ul className="list-disc list-inside space-y-1 text-gray-700">
+            {allHypotheses.map((item: string, idx: number) => <li key={idx}>{item}</li>)}
+          </ul>
+        </Card>
+      )}
+    </div>
+  );
+}
 
 function formatDate(dateString?: string) {
   if (!dateString) return '';
@@ -178,6 +270,22 @@ function FgiDetail({ data }: { data: any }) {
   );
 }
 
+// summary 렌더링 함수
+function renderSummary(summary: string | Record<string, any>) {
+  if (typeof summary === 'string') {
+    return <div className="text-gray-700 whitespace-pre-line">{summary}</div>;
+  }
+  if (summary?.polishing_result) {
+    return <div className="text-gray-700 whitespace-pre-line">{summary.polishing_result}</div>;
+  }
+  if (summary?.table_analysis) {
+    return <div className="text-gray-700 whitespace-pre-line">{summary.table_analysis}</div>;
+  }
+  return (
+    <pre className="text-xs text-gray-500 bg-gray-50 rounded p-2 overflow-x-auto">{JSON.stringify(summary, null, 2)}</pre>
+  );
+}
+
 export default function EditorPage() {
   const { user, loading: authLoading } = useAuth('/editor');
   const [tree, setTree] = useState<any>({});
@@ -185,6 +293,9 @@ export default function EditorPage() {
   const [selected, setSelected] = useState<{cat: string, id: string} | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [analysisDetail, setAnalysisDetail] = useState<any>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // 카드별 width state (px)
   const [sidebarWidth, setSidebarWidth] = useState(280); // min 200, max 400
@@ -245,6 +356,29 @@ export default function EditorPage() {
     if (user) load();
   }, [user]);
 
+  // 분석 항목 클릭 시 상세 fetch
+  useEffect(() => {
+    if (selected?.cat === 'analyses' && selected?.id && user) {
+      setAnalysisLoading(true);
+      setAnalysisError(null);
+      setAnalysisDetail(null);
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!session) {
+          setAnalysisError('세션이 만료되었습니다. 다시 로그인 해주세요.');
+          setAnalysisLoading(false);
+          return;
+        }
+        fetch(`/api/survey-analyses/${selected.id}`, {
+          headers: { 'Authorization': `Bearer ${session.access_token}` }
+        })
+          .then(res => res.ok ? res.json() : Promise.reject(res))
+          .then(data => setAnalysisDetail(data.data))
+          .catch(e => setAnalysisError('상세 정보를 불러오지 못했습니다.'))
+          .finally(() => setAnalysisLoading(false));
+      });
+    }
+  }, [selected, user]);
+
   const toggleCategory = (cat: string) => {
     setExpanded(prev => prev.includes(cat) ? prev.filter(e => e !== cat) : [...prev, cat]);
   };
@@ -268,65 +402,67 @@ export default function EditorPage() {
     <div className="flex h-[calc(100vh-4rem)] w-full gap-0 px-6 py-6 bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 select-none">
       {/* 사이드바 */}
       <div style={{ width: sidebarWidth, minWidth: 200, maxWidth: 400, height: '100%' }}>
-        <Card className="w-full h-full flex flex-col shadow-md border-gray-200 dark:border-gray-700">
-          <CardHeader className="flex-row items-center gap-2 border-b bg-white dark:bg-gray-900">
-            <Database className="w-5 h-5 text-blue-600" />
-            <CardTitle className="text-base">데이터 목록</CardTitle>
-          </CardHeader>
-          <CardContent className="flex-1 overflow-y-auto p-2">
-            {loading ? (
-              <div className="p-4 text-center text-gray-400">불러오는 중...</div>
-            ) : error ? (
-              <div className="p-4 text-center text-red-500">{error}</div>
-            ) : (
-              <div>
-                {CATEGORIES.map(cat => {
-                  const Icon = cat.icon;
-                  const items = tree[cat.key] || [];
-                  return (
-                    <div key={cat.key} className="mb-1">
-                      {/* 카테고리(폴더) 헤더 */}
-                      <div
-                        className={`flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors hover:bg-gray-50 ${expanded.includes(cat.key) ? 'bg-blue-50 border border-blue-200' : ''}`}
-                        onClick={() => toggleCategory(cat.key)}
-                      >
-                        <div className="flex items-center flex-1 min-w-0">
-                          <Folder className="w-4 h-4 text-gray-500 mr-2 flex-shrink-0" />
-                          <Icon className="w-4 h-4 text-blue-500 mr-1" />
-                          <span className="text-sm font-medium text-gray-900 truncate">{cat.label}</span>
-                        </div>
-                        {expanded.includes(cat.key) ? (
-                          <ChevronDown className="w-3 h-3 text-gray-500" />
-                        ) : (
-                          <ChevronRight className="w-3 h-3 text-gray-500" />
-                        )}
-                      </div>
-                      {/* 카테고리 내용 (확장 시) */}
-                      {expanded.includes(cat.key) && (
-                        <div className="ml-6 mt-1 space-y-1">
-                          {items.length === 0 ? (
-                            <div className="text-xs text-gray-400 p-2">데이터 없음</div>
+        <div className="h-full overflow-y-auto max-h-[calc(100vh-4rem)]">
+          <Card className="w-full h-full flex flex-col shadow-md border-gray-200 dark:border-gray-700">
+            <CardHeader className="flex-row items-center gap-2 border-b bg-white dark:bg-gray-900">
+              <Database className="w-5 h-5 text-blue-600" />
+              <CardTitle className="text-base">데이터 목록</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-y-auto p-2">
+              {loading ? (
+                <div className="p-4 text-center text-gray-400">불러오는 중...</div>
+              ) : error ? (
+                <div className="p-4 text-center text-red-500">{error}</div>
+              ) : (
+                <div>
+                  {CATEGORIES.map(cat => {
+                    const Icon = cat.icon;
+                    const items = tree[cat.key] || [];
+                    return (
+                      <div key={cat.key} className="mb-1">
+                        {/* 카테고리(폴더) 헤더 */}
+                        <div
+                          className={`flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors hover:bg-gray-50 ${expanded.includes(cat.key) ? 'bg-blue-50 border border-blue-200' : ''}`}
+                          onClick={() => toggleCategory(cat.key)}
+                        >
+                          <div className="flex items-center flex-1 min-w-0">
+                            <Folder className="w-4 h-4 text-gray-500 mr-2 flex-shrink-0" />
+                            <Icon className="w-4 h-4 text-blue-500 mr-1" />
+                            <span className="text-sm font-medium text-gray-900 truncate">{cat.label}</span>
+                          </div>
+                          {expanded.includes(cat.key) ? (
+                            <ChevronDown className="w-3 h-3 text-gray-500" />
                           ) : (
-                            items.map((item: any) => (
-                              <div
-                                key={item.id}
-                                className={`flex items-center p-1 rounded cursor-pointer hover:bg-gray-100 ${selected?.cat === cat.key && selected?.id === item.id ? 'bg-blue-100' : ''}`}
-                                onClick={() => setSelected({ cat: cat.key, id: item.id })}
-                              >
-                                <File className="w-3 h-3 text-gray-400 mr-2" />
-                                <span className="text-xs text-gray-700 truncate">{item.title || item.topic || item.uploaded_file_name || item.guide_file_name || '이름 없음'}</span>
-                              </div>
-                            ))
+                            <ChevronRight className="w-3 h-3 text-gray-500" />
                           )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                        {/* 카테고리 내용 (확장 시) */}
+                        {expanded.includes(cat.key) && (
+                          <div className="ml-6 mt-1 space-y-1">
+                            {items.length === 0 ? (
+                              <div className="text-xs text-gray-400 p-2">데이터 없음</div>
+                            ) : (
+                              items.map((item: any) => (
+                                <div
+                                  key={item.id}
+                                  className={`flex items-center p-1 rounded cursor-pointer hover:bg-gray-100 ${selected?.cat === cat.key && selected?.id === item.id ? 'bg-blue-100' : ''}`}
+                                  onClick={() => setSelected({ cat: cat.key, id: item.id })}
+                                >
+                                  <File className="w-3 h-3 text-gray-400 mr-2" />
+                                  <span className="text-xs text-gray-700 truncate">{item.title || item.topic || item.uploaded_file_name || item.guide_file_name || '이름 없음'}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
       {/* 리사이저: 사이드바-에디터 */}
       <div
@@ -338,24 +474,36 @@ export default function EditorPage() {
       />
       {/* 에디터 */}
       <div style={{ flex: 1, minWidth: 200, height: '100%' }}>
-        <Card className="w-full h-full flex flex-col shadow-md border-gray-200 dark:border-gray-700">
-          <CardHeader className="flex-row items-center gap-2 border-b bg-white dark:bg-gray-900">
-            <Edit3 className="w-5 h-5 text-indigo-600" />
-            <CardTitle className="text-base">에디터</CardTitle>
-          </CardHeader>
-          <CardContent className="flex-1 flex flex-col p-6 gap-4">
-            {selectedData ? (
-              <div>
-                {selected?.cat === 'plans' && <PlanDetail data={selectedData} />}
-                {selected?.cat === 'analyses' && <AnalysisDetail data={selectedData} />}
-                {selected?.cat === 'visualizations' && <VisualizationDetail data={selectedData} />}
-                {selected?.cat === 'fgi' && <FgiDetail data={selectedData} />}
-              </div>
-            ) : (
-              <div className="text-gray-400 text-center mt-20">왼쪽에서 데이터를 선택하세요.</div>
-            )}
-          </CardContent>
-        </Card>
+        <div className="h-full overflow-y-auto max-h-[calc(100vh-4rem)] bg-white dark:bg-gray-900 min-h-full">
+          <Card className="w-full flex flex-col shadow-md border-gray-200 dark:border-gray-700">
+            <CardHeader className="flex-row items-center gap-2 border-b bg-white dark:bg-gray-900">
+              <Edit3 className="w-5 h-5 text-indigo-600" />
+              <CardTitle className="text-base">에디터</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col p-6 gap-4">
+              {selectedData ? (
+                <div>
+                  {selected?.cat === 'analyses' ? (
+                    analysisLoading ? (
+                      <div className="text-center text-gray-400">불러오는 중...</div>
+                    ) : analysisError ? (
+                      <div className="text-center text-red-500">{analysisError}</div>
+                    ) : analysisDetail ? (
+                      <EditorAnalysisDetailView data={analysisDetail} />
+                    ) : null
+                  ) : (
+                    // 기존 PlanDetail/VisualizationDetail/FgiDetail 등...
+                    <>{selected?.cat === 'plans' && <PlanDetail data={selectedData} />}
+                      {selected?.cat === 'visualizations' && <VisualizationDetail data={selectedData} />}
+                      {selected?.cat === 'fgi' && <FgiDetail data={selectedData} />}</>
+                  )}
+                </div>
+              ) : (
+                <div className="text-gray-400 text-center mt-20">왼쪽에서 데이터를 선택하세요.</div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
       {/* 리사이저: 에디터-챗봇 */}
       <div
@@ -367,21 +515,23 @@ export default function EditorPage() {
       />
       {/* 챗봇 */}
       <div style={{ width: chatbotWidth, minWidth: 280, maxWidth: 500, height: '100%' }}>
-        <Card className="w-full h-full flex flex-col shadow-md border-gray-200 dark:border-gray-700">
-          <CardHeader className="flex-row items-center gap-2 border-b bg-white dark:bg-gray-900">
-            <Bot className="w-5 h-5 text-purple-600" />
-            <CardTitle className="text-base">LLM 챗봇</CardTitle>
-          </CardHeader>
-          <CardContent className="flex-1 flex flex-col p-4 gap-2">
-            <div className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-800 rounded p-3 text-gray-500 mb-2">
-              <div className="mb-2">챗봇과의 대화가 여기에 표시됩니다.</div>
-            </div>
-            <div className="flex gap-2">
-              <Input placeholder="질문을 입력하세요..." className="flex-1" />
-              <Button>전송</Button>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="h-full overflow-y-auto max-h-[calc(100vh-4rem)]">
+          <Card className="w-full h-full flex flex-col shadow-md border-gray-200 dark:border-gray-700">
+            <CardHeader className="flex-row items-center gap-2 border-b bg-white dark:bg-gray-900">
+              <Bot className="w-5 h-5 text-purple-600" />
+              <CardTitle className="text-base">LLM 챗봇</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col p-4 gap-2">
+              <div className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-800 rounded p-3 text-gray-500 mb-2">
+                <div className="mb-2">챗봇과의 대화가 여기에 표시됩니다.</div>
+              </div>
+              <div className="flex gap-2">
+                <Input placeholder="질문을 입력하세요..." className="flex-1" />
+                <Button>전송</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );

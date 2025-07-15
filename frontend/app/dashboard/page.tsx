@@ -76,6 +76,8 @@ interface SurveyAnalysis {
   uploaded_file_name?: string;
   created_at: string;
   analysis_result: any;
+  question_key?: string;
+  question?: string;
 }
 
 interface SurveyVisualization {
@@ -618,6 +620,15 @@ export default function DashboardPage() {
                           <p className="text-sm text-gray-800 truncate">{analysis.uploaded_file_name}</p>
                         </div>
                       )}
+                      {/* 질문 텍스트 노출 (단일 분석) */}
+                      {(analysis.question || analysis.question_key) && (
+                        <div>
+                          <p className="text-xs text-gray-600">질문</p>
+                          <p className="text-xs text-gray-800 truncate">
+                            {analysis.question || analysis.question_key}
+                          </p>
+                        </div>
+                      )}
                       {/* 분석 상태 정보 */}
                       {analysis.analysis_result && (
                         <div className="space-y-2">
@@ -716,6 +727,21 @@ export default function DashboardPage() {
                             <span className="text-xs text-gray-600">문항 수: </span>
                             <span className="text-xs font-bold">{analysis.analysis_result?.results?.length || 0}</span>
                           </div>
+                          {/* 예시 문항(question) 노출 (배치 분석) */}
+                          {Array.isArray(analysis.analysis_result?.results) && analysis.analysis_result.results.length > 0 && (
+                            <div>
+                              <p className="text-xs text-gray-600 mb-1">예시 문항</p>
+                              {analysis.analysis_result.results.slice(0, 2).map((q: any, idx: number) => (
+                                <div key={q.question_key || idx} className="text-xs text-gray-800 truncate">
+                                  <span className="font-mono">{q.question_key}</span>
+                                  {q.question && <>: {q.question}</>}
+                                </div>
+                              ))}
+                              {analysis.analysis_result.results.length > 2 && (
+                                <span className="text-xs text-gray-400">+ {analysis.analysis_result.results.length - 2}개 더 있음</span>
+                              )}
+                            </div>
+                          )}
                           <div className="flex items-center text-xs text-gray-500">
                             <Calendar className="h-3 w-3 mr-1" />
                             {formatDate(analysis.created_at)}

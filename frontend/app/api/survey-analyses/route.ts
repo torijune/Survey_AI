@@ -20,7 +20,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { title, description, uploaded_file_name, analysis_result } = await req.json();
+    const { title, description, uploaded_file_name, analysis_result, question_key, question } = await req.json();
     
     // Authorization header에서 토큰 추출
     const authHeader = req.headers.get('authorization');
@@ -44,7 +44,9 @@ export async function POST(req: Request) {
         title,
         description,
         uploaded_file_name,
-        analysis_result
+        analysis_result,
+        question_key,   // 추가
+        question        // 추가
       })
       .select()
       .single();

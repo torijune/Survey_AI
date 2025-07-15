@@ -337,14 +337,12 @@ export default function TableAnalysisPage() {
 
   const handleSave = async () => {
     if (!user || !analysisResult || !title.trim()) return;
-    
     setSaving(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         throw new Error('세션이 만료되었습니다.');
       }
-
       const analysisData = {
         summary: analysisResult,
         timestamp: new Date().toISOString(),
@@ -355,7 +353,6 @@ export default function TableAnalysisPage() {
           fileName: uploadedFile?.name || 'Unknown'
         }
       };
-
       const response = await fetch('/api/survey-analyses', {
         method: 'POST',
         headers: {
@@ -366,15 +363,15 @@ export default function TableAnalysisPage() {
           title: title.trim(),
           description: description.trim() || null,
           uploaded_file_name: uploadedFile?.name || 'Unknown file',
-          analysis_result: analysisData
+          analysis_result: analysisData,
+          question_key: selectedQuestion,
+          question: surveyData?.questionTexts?.[selectedQuestion] || ""
         })
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || '저장 중 오류가 발생했습니다.');
       }
-
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {
@@ -636,10 +633,15 @@ export default function TableAnalysisPage() {
       if (!session) {
         throw new Error('세션이 만료되었습니다.');
       }
+      // question 필드 추가
+      const resultsWithQuestions = batchStatus.map(row => ({
+        ...row,
+        question: surveyData?.questionTexts?.[row.question_key] || ""
+      }));
       // 저장할 데이터 구성 (batchStatus 전체)
       const analysisData = {
         batchJobId,
-        results: batchStatus,
+        results: resultsWithQuestions,
         timestamp: new Date().toISOString(),
         analysisMetadata: {
           analysisType: "batch",
@@ -657,7 +659,9 @@ export default function TableAnalysisPage() {
           title: batchSaveTitle.trim(),
           description: batchSaveDescription.trim() || null,
           uploaded_file_name: uploadedFile?.name || 'Unknown file',
-          analysis_result: analysisData
+          analysis_result: analysisData,
+          question_key: "batch",
+          question: null
         })
       });
       if (!response.ok) {
