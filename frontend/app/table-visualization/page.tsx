@@ -37,24 +37,22 @@ export default function TableVisualizationPage() {
   const [lang, setLang] = useState<"한국어" | "English">("한국어");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
-  const [surveyData, setSurveyData] = useState<any>(null);
-  const [selectedKey, setSelectedKey] = useState<string>("");
+  const [tableData, setTableData] = useState<any>(null);
   const [chartType, setChartType] = useState<"bar" | "pie" | "line">("bar");
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
     setLoading(true);
     setError("");
-    setSurveyData(null);
-    setSelectedKey("");
+    setTableData(null);
     try {
       const formData = new FormData();
       formData.append("file", acceptedFiles[0]);
       const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const res = await fetch(`${baseUrl}/api/visualization`, { method: "POST", body: formData });
+      const res = await fetch(`${baseUrl}/api/v1/visualization/parse-table`, { method: "POST", body: formData });
       if (!res.ok) throw new Error(TEXT.error[lang]);
       const data = await res.json();
-      setSurveyData(data);
+      setTableData(data);
     } catch (err: any) {
       setError(err.message || TEXT.error[lang]);
     } finally {
@@ -71,31 +69,11 @@ export default function TableVisualizationPage() {
     multiple: false
   });
 
-  // 선택된 테이블 정보
-  const currentTable = surveyData && selectedKey ? surveyData.tables[selectedKey] : null;
-  // "대분류" 컬럼 인덱스 찾기
-  const mainCategoryIdx = currentTable?.columns.findIndex((col: string) => col.replace(/\s/g, "") === "대분류");
-  // "전체" 행 찾기
-  const totalRow = currentTable?.data.find((row: any[]) => (row[mainCategoryIdx] || "").replace(/\s/g, "") === "전체");
-  // 메타 컬럼명 집합
-  const metaCols = new Set(["대분류", "소분류", "사례수"]);
-  // 응답 컬럼 인덱스: 메타 컬럼을 제외한 나머지
-  const responseColIndices = currentTable
-    ? currentTable.columns
-        .map((col: any, idx: number) => ({ col, idx }))
-        .filter(({ col }: { col: any }) => !metaCols.has(col.replace(/\s/g, "")))
-        .map(({ idx }: { idx: number }) => idx)
-    : [];
-  const responseLabels = currentTable
-    ? responseColIndices.map((idx: number) => currentTable.columns[idx])
-    : [];
-  const responseValues = totalRow
-    ? responseColIndices.map((idx: number) => totalRow[idx])
-    : [];
-  const chartData = responseLabels.map((label: string, idx: number) => ({
-    name: label,
-    value: Number(responseValues[idx]) || 0,
-  }));
+  // 차트 데이터 생성
+  const chartData = tableData ? tableData.columns.slice(1).map((col: string, idx: number) => ({
+    name: col,
+    value: Number(tableData.data[0]?.[idx + 1]) || 0,
+  })) : [];
 
   return (
     <div className="w-full min-h-screen flex flex-row bg-gray-50 dark:bg-gray-900 dark:text-gray-100">
@@ -120,40 +98,21 @@ export default function TableVisualizationPage() {
             </div>
             {loading && <div className="text-blue-600 my-2 text-sm">{TEXT.loading[lang]}</div>}
             {error && <div className="text-red-600 my-2 text-sm">{error}</div>}
-                </div>
-              </div>
-        {/* 질문 선택 드롭다운 */}
-        {surveyData && surveyData.question_keys && (
+          </div>
+        </div>
+        {/* 차트 유형 선택 */}
+        {tableData && (
           <div className="mt-4">
-            <label className="block font-medium mb-1">{TEXT.select_table[lang]}</label>
+            <label className="block font-medium mb-1">{lang === "한국어" ? "차트 유형" : "Chart Type"}</label>
             <select
               className="w-full border rounded px-3 py-2 bg-white text-gray-900 border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-400 dark:border-gray-700"
-              value={selectedKey}
-              onChange={e => setSelectedKey(e.target.value)}
+              value={chartType}
+              onChange={e => setChartType(e.target.value as any)}
             >
-              <option value="">{TEXT.choose[lang]}</option>
-              {surveyData.question_keys.map((key: string) => {
-                const question = surveyData.question_texts[key] || key;
-                return (
-                  <option key={key} value={key}>{key} - {question.length > 50 ? question.slice(0, 50) + "..." : question}</option>
-                );
-              })}
+              {CHART_TYPES.map(type => (
+                <option key={type.key} value={type.key}>{type.label[lang]}</option>
+              ))}
             </select>
-            {/* 차트 유형 선택 */}
-            {selectedKey && (
-              <div className="mt-4">
-                <label className="block font-medium mb-1">{lang === "한국어" ? "차트 유형" : "Chart Type"}</label>
-                <select
-                  className="w-full border rounded px-3 py-2 bg-white text-gray-900 border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-400 dark:border-gray-700"
-                  value={chartType}
-                  onChange={e => setChartType(e.target.value as any)}
-                >
-                  {CHART_TYPES.map(type => (
-                    <option key={type.key} value={type.key}>{type.label[lang]}</option>
-                  ))}
-                </select>
-              </div>
-            )}
           </div>
         )}
       </aside>
@@ -161,62 +120,62 @@ export default function TableVisualizationPage() {
       <main className="flex-1 flex flex-col items-center py-10 px-4 overflow-y-auto">
         <div className="w-full max-w-3xl">
           {/* 차트 */}
-          {currentTable && chartData.length > 0 && (
+          {tableData && chartData.length > 0 && (
             <div className="bg-white dark:bg-gray-900 rounded-lg shadow p-6 mb-8 border border-gray-200 dark:border-gray-700">
               <div className="font-semibold mb-2">{TEXT.chart[lang]}</div>
               {chartType === "bar" && (
                 <ResponsiveContainer width="100%" height={320}>
-                      <BarChart data={chartData} margin={{ top: 30, right: 30, left: 30, bottom: 60 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                        <XAxis dataKey="name" angle={-30} textAnchor="end" interval={0} height={60} tick={{ fontSize: 14 }} />
-                        <YAxis tick={{ fontSize: 14 }} />
-                        <Tooltip wrapperStyle={{ fontSize: 14 }} />
+                  <BarChart data={chartData} margin={{ top: 30, right: 30, left: 30, bottom: 60 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                    <XAxis dataKey="name" angle={-30} textAnchor="end" interval={0} height={60} tick={{ fontSize: 14 }} />
+                    <YAxis tick={{ fontSize: 14 }} />
+                    <Tooltip wrapperStyle={{ fontSize: 14 }} />
                     <Bar dataKey="value" fill="#4472C4" label={{ position: 'top', fontSize: 14, fill: '#222' }} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  )}
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
               {chartType === "pie" && (
                 <ResponsiveContainer width="100%" height={320}>
-                      <PieChart>
-                        <Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={120} label={({ name, value }) => `${name}: ${value}` }>
+                  <PieChart>
+                    <Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={120} label={({ name, value }) => `${name}: ${value}` }>
                       {chartData.map((entry: any, idx: number) => (
-                            <Cell key={`cell-${idx}`} fill={EXCEL_COLORS[idx % EXCEL_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip wrapperStyle={{ fontSize: 14 }} />
-                        <Legend wrapperStyle={{ fontSize: 14 }} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  )}
+                        <Cell key={`cell-${idx}`} fill={EXCEL_COLORS[idx % EXCEL_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip wrapperStyle={{ fontSize: 14 }} />
+                    <Legend wrapperStyle={{ fontSize: 14 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
               {chartType === "line" && (
                 <ResponsiveContainer width="100%" height={320}>
-                      <LineChart data={chartData} margin={{ top: 30, right: 30, left: 30, bottom: 60 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                        <XAxis dataKey="name" angle={-30} textAnchor="end" interval={0} height={60} tick={{ fontSize: 14 }} />
-                        <YAxis tick={{ fontSize: 14 }} />
-                        <Tooltip wrapperStyle={{ fontSize: 14 }} />
-                        <Legend wrapperStyle={{ fontSize: 14 }} />
+                  <LineChart data={chartData} margin={{ top: 30, right: 30, left: 30, bottom: 60 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                    <XAxis dataKey="name" angle={-30} textAnchor="end" interval={0} height={60} tick={{ fontSize: 14 }} />
+                    <YAxis tick={{ fontSize: 14 }} />
+                    <Tooltip wrapperStyle={{ fontSize: 14 }} />
+                    <Legend wrapperStyle={{ fontSize: 14 }} />
                     <Line type="monotone" dataKey="value" stroke="#4472C4" strokeWidth={3} dot label={{ fontSize: 14, fill: '#222' }} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  )}
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </div>
           )}
           {/* 원본 테이블 */}
-          {currentTable && (
+          {tableData && (
             <div className="bg-white dark:bg-gray-900 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
               <div className="font-semibold mb-2">{TEXT.table[lang]}</div>
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse border border-gray-300 dark:border-gray-700 text-sm">
                   <thead>
                     <tr>
-                      {currentTable.columns.map((col: string, idx: number) => (
+                      {tableData.columns.map((col: string, idx: number) => (
                         <th key={idx} className="border border-gray-300 dark:border-gray-700 px-2 py-1 bg-gray-50 dark:bg-gray-800">{col}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {currentTable.data.map((row: any[], rIdx: number) => (
+                    {tableData.data.map((row: any[], rIdx: number) => (
                       <tr key={rIdx}>
                         {row.map((cell: any, cIdx: number) => (
                           <td key={cIdx} className="border border-gray-300 dark:border-gray-700 px-2 py-1">{cell}</td>
@@ -225,13 +184,13 @@ export default function TableVisualizationPage() {
                     ))}
                   </tbody>
                 </table>
-                </div>
               </div>
-            )}
+            </div>
+          )}
           {/* 안내 메시지 */}
-          {!surveyData && !loading && (
+          {!tableData && !loading && (
             <div className="text-gray-400 text-center mt-24">{TEXT.no_data[lang]}</div>
-        )}
+          )}
         </div>
       </main>
     </div>

@@ -134,7 +134,7 @@ export default function TableAnalysisPage() {
           formData.append("analysis_type", "recommend_test_types");
           formData.append("lang", lang);
           formData.append("use_statistical_test", useStatisticalTest.toString());
-          const response = await fetch("/api/table-analysis", {
+          const response = await fetch("/api/v1/table-analysis/recommend-test-types", {
             method: "POST",
             body: formData,
           });
@@ -188,7 +188,7 @@ export default function TableAnalysisPage() {
         const formData = new FormData();
         formData.append("file", file);
         formData.append("analysis_type", "parse");
-        const response = await fetch("/api/table-analysis", {
+        const response = await fetch("/api/v1/table-analysis/parse", {
           method: "POST",
           body: formData,
         });
@@ -249,7 +249,7 @@ export default function TableAnalysisPage() {
       formData.append("user_id", user?.id || "");
       // 통계 검정 유무 파라미터 추가
       formData.append("use_statistical_test", useStatisticalTest.toString());
-      const response = await fetch("/api/table-analysis", {
+      const response = await fetch("/api/v1/table-analysis/analyze", {
         method: "POST",
         body: formData,
       });
@@ -300,7 +300,7 @@ export default function TableAnalysisPage() {
       // 통계 검정 유무 파라미터 추가
       formData.append("use_statistical_test", useStatisticalTest.toString());
       // batch-analyze API 호출
-      const response = await fetch("/api/batch-analyze", {
+      const response = await fetch("/api/v1/batch-analysis/start", {
         method: "POST",
         body: formData,
       });
@@ -310,7 +310,7 @@ export default function TableAnalysisPage() {
         // 폴링 시작
         if (pollingRef.current) clearInterval(pollingRef.current);
         pollingRef.current = setInterval(async () => {
-          const statusRes = await fetch(`/api/batch-status?job_id=${result.job_id}`);
+          const statusRes = await fetch(`/api/v1/batch-analysis/status?job_id=${result.job_id}`);
           const statusJson = await statusRes.json();
           if (statusJson.success) {
             setBatchStatus(statusJson.results || []);

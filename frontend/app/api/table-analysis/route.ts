@@ -25,8 +25,7 @@ export async function POST(req: NextRequest) {
     let backendApi = "";
     
     if (analysisType === "analyze") {
-      // AI 분석 실행
-      backendApi = `${backendUrl}/api/table-analyze`;
+      backendApi = `${backendUrl}/api/v1/table-analysis/analyze`;
       backendForm.append("selected_key", selectedKey);
       backendForm.append("lang", lang);
       backendForm.append("user_id", userId);
@@ -36,15 +35,13 @@ export async function POST(req: NextRequest) {
         backendForm.append("batch_test_types", formData.get("batch_test_types")!.toString());
       }
     } else if (analysisType === "recommend_test_types") {
-      // 통계 검정 방법 추천 요청 프록시
-      backendApi = `${backendUrl}/api/table-analyze`;
+      backendApi = `${backendUrl}/api/v1/table-analysis/analyze`;
       backendForm.append("analysis_type", "recommend_test_types");
       backendForm.append("lang", lang);
       backendForm.append("user_id", userId);
       backendForm.append("use_statistical_test", useStatisticalTest);
     } else {
-      // 테이블 파싱만
-      backendApi = `${backendUrl}/api/table-parse`;
+      backendApi = `${backendUrl}/api/v1/table-analysis/parse`;
       if (selectedKey) backendForm.append("selected_key", selectedKey);
     }
 

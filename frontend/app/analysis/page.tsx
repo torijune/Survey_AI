@@ -90,7 +90,7 @@ export default function AnalysisWorkflowPage() {
       }
 
       const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const response = await fetch(`${baseUrl}/api/langgraph`, {
+      const response = await fetch(`${baseUrl}/api/v1/single-analysis/analyze`, {
         method: "POST",
         body: formData,
       });

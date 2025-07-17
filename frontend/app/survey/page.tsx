@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import LanguageSwitcher from '@/components/LanguageSwitcher';
@@ -50,6 +50,54 @@ export default function SurveyPlanningPage() {
   const [validationChecklist, setValidationChecklist] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveResult, setSaveResult] = useState<{ id?: string; message?: string } | null>(null);
+  const [wsProgress, setWsProgress] = useState<number>(0);
+  const [wsStep, setWsStep] = useState<string>("");
+  const [wsMessage, setWsMessage] = useState<string>("");
+  const [wsResult, setWsResult] = useState<any | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // WebSocket 진행률 수신 및 설계 결과 수신
+  useEffect(() => {
+    if (!loading) return;
+    wsRef.current = new WebSocket("ws://localhost:8000/ws/planner/progress");
+    wsRef.current.onopen = () => {
+      // 설계 생성 시작 시 topic/objective/lang을 첫 메시지로 전송
+      wsRef.current?.send(JSON.stringify({
+        topic,
+        objective,
+        lang
+      }));
+    };
+    wsRef.current.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.progress) setWsProgress(data.progress);
+      if (data.step) setWsStep(data.step);
+      if (data.message) setWsMessage(data.message);
+      if (data.result) {
+        setPlannerState(data.result.result);
+        setValidationChecklist(data.result.result.validation_checklist || "");
+        setLoading(false);
+        setWsProgress(0);
+        setWsStep("");
+        setWsMessage("");
+        setWsResult(data.result);
+      }
+      if (data.error) {
+        setError(data.error);
+        setLoading(false);
+      }
+    };
+    wsRef.current.onclose = () => {
+      setWsProgress(0);
+      setWsStep("");
+      setWsMessage("");
+    };
+    return () => {
+      wsRef.current?.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   const STEP_LABELS: Record<PlannerStep, string> = {
     intro: lang === "한국어" ? "설문 목적 생성" : "Generating Objective",
@@ -59,6 +107,7 @@ export default function SurveyPlanningPage() {
     validationChecklist: lang === "한국어" ? "설문 검증 체크리스트" : "Survey Validation Checklist",
   };
 
+  // handleGenerate에서 fetch 대신 loading만 true로 설정
   const handleGenerate = async () => {
     if (!topic) {
       alert(TEXT.warning_topic[lang]);
@@ -71,61 +120,27 @@ export default function SurveyPlanningPage() {
     setStepStates([]);
     setValidationChecklist("");
     setSaved(false);
-    try {
-      // Python 백엔드 API 호출
-      const formData = new FormData();
-      formData.append("topic", topic);
-      formData.append("objective", objective);
-      formData.append("lang", lang);
-      if (user?.id) {
-        formData.append("user_id", user.id);
-      }
-
-      const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const response = await fetch(`${baseUrl}/api/planner`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`설문 계획 생성 실패: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      
-      if (result.success) {
-        setPlannerState(result.result);
-        setValidationChecklist(result.result.validation_checklist || "");
-      } else {
-        throw new Error(result.error || "설문 계획 생성 중 오류가 발생했습니다.");
-      }
-      
-      setCurrentStep(null);
-    } catch (e: any) {
-      setError(e?.message || '에러가 발생했습니다.');
-      setCurrentStep(null);
-    } finally {
-      setLoading(false);
-    }
+    setWsResult(null);
+    // WebSocket이 자동으로 연결됨
   };
 
   const handleSave = async () => {
     if (!user || !plannerState) return;
-    
     setSaving(true);
+    setSaveResult(null); // 저장 결과 초기화
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         throw new Error('세션이 만료되었습니다.');
       }
-
-      const response = await fetch('/api/survey-plans', {
+      const response = await fetch('/api/planner/save', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
+          user_id: user.id,
           topic,
           objective,
           generated_objective: plannerState.generated_objective,
@@ -136,16 +151,15 @@ export default function SurveyPlanningPage() {
           full_result: plannerState
         })
       });
-
+      const result = await response.json();
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || '저장 중 오류가 발생했습니다.');
+        throw new Error(result.error || '저장 중 오류가 발생했습니다.');
       }
-
+      setSaveResult({ id: result.id, message: result.message });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {
-      console.error('저장 오류:', error);
+      setSaveResult({ message: error instanceof Error ? error.message : '저장 중 오류가 발생했습니다.' });
       setError(error instanceof Error ? error.message : '저장 중 오류가 발생했습니다.');
     } finally {
       setSaving(false);
@@ -181,39 +195,34 @@ export default function SurveyPlanningPage() {
       <p className="mb-4">{TEXT.desc[lang]}</p>
       <div className="bg-gray-50 p-8 rounded-lg border-2 shadow-lg text-gray-700 space-y-4 w-full dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100">
         {/* Progress Bar */}
-        {loading && (
+        {(loading || wsProgress > 0) && (
           <div className="mb-6">
             <div className="flex items-center justify-between mb-1">
               <span className="text-sm font-medium text-blue-700">
-                {lang === "한국어" ? "진행률" : "Progress"}
+                진행률
               </span>
               <span className="text-xs text-gray-500">
-                {stepStates.length} / {PLANNER_STEPS.length}
+                {Math.round(wsProgress * 5)}/5
               </span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 dark:bg-gray-700">
               <div
                 className="bg-blue-500 h-3 rounded-full transition-all duration-300"
-                style={{ width: `${(stepStates.length / PLANNER_STEPS.length) * 100}%` }}
+                style={{ width: `${wsProgress * 100}%` }}
               />
             </div>
             <div className="flex justify-between mt-2 text-xs text-gray-500 dark:text-gray-300">
-              {PLANNER_STEPS.map((step, idx) => (
-                <span
-                  key={step}
-                  className={
-                    idx < stepStates.length
-                      ? "text-blue-700 font-semibold"
-                      : idx === stepStates.length
-                      ? "text-blue-500 font-bold animate-pulse"
-                      : ""
-                  }
-                >
-                  {STEP_LABELS[step]}
-                </span>
-              ))}
+              <span className={wsStep === "intro" ? "text-blue-700 font-semibold" : ""}>설문 목적 생성</span>
+              <span className={wsStep === "audience" ? "text-blue-700 font-semibold" : ""}>타겟 응답자 생성</span>
+              <span className={wsStep === "structure" ? "text-blue-700 font-semibold" : ""}>설문 구조 생성</span>
+              <span className={wsStep === "question" ? "text-blue-700 font-semibold" : ""}>문항 생성</span>
+              <span className={wsStep === "validationChecklist" ? "text-blue-700 font-semibold" : ""}>설문 검증 체크리스트</span>
             </div>
           </div>
+        )}
+        {/* 진행 메시지 */}
+        {wsMessage && (
+          <div className="mb-4 text-blue-600 font-semibold">{wsMessage}</div>
         )}
         <div className="space-y-4">
           <label className="block font-medium mb-1">{TEXT.topic[lang]}</label>
@@ -390,16 +399,25 @@ export default function SurveyPlanningPage() {
                   </span>
                 )}
               </div>
-              {/* 주제(항상 표시) */}
-              <div className="bg-white border rounded shadow p-6 min-h-[180px] flex flex-col">
-                <span className="font-semibold mb-2">주제</span>
-                {typeof latestState?.topic === 'string' && latestState.topic.trim().length > 0 ? (
-                  <span>{latestState.topic}</span>
-                ) : (
-                  <span className="text-gray-400 mt-2">{lang === "한국어" ? "실행 중..." : "In progress..."}</span>
+            </div>
+          </div>
+        )}
+        {/* 저장 버튼 및 저장 결과 UI */}
+        {plannerState && !loading && (
+          <div className="mt-6">
+            <Button onClick={handleSave} className="w-full" disabled={saving}>
+              {TEXT.save[lang]}
+            </Button>
+            {saveResult && (
+              <div className={`mt-4 ${saveResult.id ? 'text-green-600' : 'text-red-600'}`}>
+                {saveResult.message}
+                {saveResult.id && (
+                  <div className="text-xs text-gray-500 mt-1">
+                    저장된 Plan ID: <span className="font-mono">{saveResult.id}</span>
+                  </div>
                 )}
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>
