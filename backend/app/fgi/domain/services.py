@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional
 import re
 import io
 from docx import Document
-from app.fgi.domain.entities import FGIState, FGIChunk, FGIAnalysisResult, FGIGuideSubject
+from app.fgi.domain.entities import FGIState
 from app.fgi.infra.openai_client import OpenAIClient
 
 

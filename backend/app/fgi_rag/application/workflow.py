@@ -6,7 +6,7 @@ from typing import Dict, Any
 class FGIRagWorkflow:
     """FGI RAG 워크플로우"""
     def __init__(self, supabase_client, llm_client):
-        self.repository = FGIRagRepository(supabase_client)
+        self.repository = FGIRagRepository(supabase_client, llm_client)
         self.service = FGIRagService(self.repository, llm_client)
         self.use_case = FGIRagAnalysisUseCase(self.service)
 

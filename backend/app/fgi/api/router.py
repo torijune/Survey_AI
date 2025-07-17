@@ -4,8 +4,7 @@ import uuid
 from app.fgi.domain.use_cases import FGIAnalysisUseCase
 from app.fgi.domain.services import FGIAnalysisService
 from app.fgi.infra.openai_client import OpenAIClient
-from utils.supabase_client import get_supabase
-from app.fgi.api.progress_utils import update_fgi_progress
+from app.fgi.infra.supabase_client import get_supabase
 
 router = APIRouter(prefix="", tags=["fgi"])
 

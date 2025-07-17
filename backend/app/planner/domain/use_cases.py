@@ -1,5 +1,5 @@
 from typing import Dict, Any, Optional
-from app.planner.domain.entities import PlannerState, PlannerResult
+from app.planner.domain.entities import PlannerState
 from app.planner.domain.services import PlannerService
 
 

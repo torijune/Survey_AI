@@ -20,7 +20,6 @@ from app.editor.domain.use_cases import (
 )
 from app.editor.domain.services import ProjectService
 from app.editor.infra.editor_repository import ProjectRepository, ProjectItemRepository, ProjectFileRepository
-from backend.utils.supabase_client import get_supabase
 from app.utils.auth import get_user_id_from_token
 
 

@@ -22,6 +22,20 @@ class FGIRagService:
 
     def _build_prompt(self, topic: str, context: str, analysis_tone: str) -> str:
         if analysis_tone == "키워드 중심":
-            return f"회의 내용:\n{context}\n\n질문: 회의에서 '{topic}'에 대해 논의된 주요 키워드, 참여자들이 제시한 핵심 주제, 의견을 간략하게 키워드/주제 위주로 정리해줘.\n\n답변:"
+            return f"""
+            회의 내용:
+            {context}
+            
+            질문: 회의에서 '{topic}'에 대해 논의된 주요 키워드, 참여자들이 제시한 핵심 주제, 의견을 간략하게 키워드/주제 위주로 정리해줘.
+            
+            답변:
+            """
         else:
-            return f"회의 내용:\n{context}\n\n질문: 회의에서 '{topic}'에 대해 참여자들이 어떤 의견을 제시하고 논의했는지 자연어로 키워드 및 중심 주제들에 대해서 요약 및 설명해줘.\n\n답변:" 
+            return f"""
+            회의 내용:
+            {context}
+            
+            질문: 회의에서 '{topic}'에 대해 참여자들이 어떤 의견을 제시하고 논의했는지 자연어로 키워드 및 중심 주제들에 대해서 요약 및 설명해줘.
+            
+            답변:
+            """

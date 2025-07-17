@@ -1,4 +1,4 @@
-from utils.supabase_client import get_supabase
+from app.fgi.infra.supabase_client import get_supabase
 from typing import Optional
 
 async def update_fgi_progress(job_id: str, progress: str, current: int, total: int, final_summary: Optional[str] = None):

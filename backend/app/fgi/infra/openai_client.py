@@ -39,3 +39,24 @@ class OpenAIClient:
             return str(response.content).strip()
         except Exception as e:
             raise Exception(f"OpenAI API 호출 실패: {str(e)}") 
+
+    async def get_embedding(self, text: str, model: str = "text-embedding-3-small") -> list[float]:
+        """OpenAI 임베딩 API 호출"""
+        import aiohttp
+        import os
+        api_key = os.getenv("OPENAI_API_KEY")
+        url = "https://api.openai.com/v1/embeddings"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "input": text,
+            "model": model
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                data = await resp.json()
+                if resp.status != 200:
+                    raise Exception(f"임베딩 API 오류: {data}")
+                return data["data"][0]["embedding"] 

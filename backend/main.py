@@ -14,6 +14,8 @@ from app.batch_analysis.api.router import router as batch_analysis_router
 from app.visualization.api.router import router as visualization_router
 from app.fgi.api.ws_router import ws_router as fgi_ws_router
 from app.planner.api.ws_router import ws_router as planner_ws_router
+from app.fgi_rag.api.router import router as fgi_rag_router
+from app.fgi_rag.api.ws_router import ws_router as fgi_subject_ws_router
 
 
 app = FastAPI(title="Survey AI Backend", version="1.0.0")
@@ -27,15 +29,16 @@ app.add_middleware(
 )
 
 # Feature-Sliced Clean Architecture API 라우터 등록
-## planner: /api/planner/create, 
 app.include_router(planner_router, prefix="/api/planner")
 app.include_router(single_analysis_router, prefix="/api/single-analysis")
 app.include_router(fgi_router, prefix="/api/fgi")
 app.include_router(batch_analysis_router, prefix="/api/batch-analysis")
 app.include_router(visualization_router, prefix="/api/visualization")
+app.include_router(fgi_rag_router, prefix="/api/fgi-rag")
 # WebSocket 라우터는 prefix 없이 등록
 app.include_router(fgi_ws_router)
 app.include_router(planner_ws_router)
+app.include_router(fgi_subject_ws_router)
 
 @app.get("/")
 async def root():

@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from app.batch_analysis.domain.entities import BatchAnalysisJob, BatchAnalysisResult, BatchAnalysisLog
-from utils.supabase_client import get_supabase
+from app.batch_analysis.infra.supabase_client import get_supabase
 
 
 class BatchAnalysisRepository:

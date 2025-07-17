@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from utils.supabase_client import get_supabase
+from app.planner.infra.supabase_client import get_supabase
 import uuid
 from datetime import datetime
 

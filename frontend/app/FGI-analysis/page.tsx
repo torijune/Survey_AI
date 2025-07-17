@@ -166,6 +166,21 @@ export default function FGIAnalysisPage() {
   const [manualTopics, setManualTopics] = useState<string[]>([]);
   const [manualTopicInput, setManualTopicInput] = useState<string>("");
   const [analysisTone, setAnalysisTone] = useState<string>("설명 중심");
+  // 1. 상태 추가
+  const [savingSubject, setSavingSubject] = useState(false);
+  const [savedSubject, setSavedSubject] = useState(false);
+  const [subjectSaveError, setSubjectSaveError] = useState<string | null>(null);
+  // 상태 추가
+  const [subjectSaveTitle, setSubjectSaveTitle] = useState("");
+  const [subjectSaveDescription, setSubjectSaveDescription] = useState("");
+  // 1. 상태 추가
+  const [topicProgress, setTopicProgress] = useState<{
+    total: number;
+    current: number;
+    completed: number;
+    summaries: Array<{topic: string, summary: string, status: 'pending' | 'processing' | 'completed' | 'error'}>;
+  }>({total: 0, current: 0, completed: 0, summaries: []});
+  const topicWsRef = useRef<WebSocket | null>(null);
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -457,7 +472,7 @@ export default function FGIAnalysisPage() {
       wsRef.current = null;
     }
     if (jobId) {
-      await fetch(`/api/fgi-analysis?jobId=${jobId}`, { method: 'DELETE' });
+      await fetch(`/api/fgi?jobId=${jobId}`, { method: 'DELETE' });
     }
     // 상태 초기화
     setIsProcessing(false);
@@ -506,7 +521,7 @@ export default function FGIAnalysisPage() {
       setJobId(job_id);
       formData.append("job_id", job_id);
       const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const response = await fetch(`${baseUrl}/api/v1/fgi/analyze`, {
+      const response = await fetch(`${baseUrl}/api/fgi/analyze`, {
         method: "POST",
         body: formData,
       });
@@ -719,7 +734,7 @@ export default function FGIAnalysisPage() {
     
     try {
       const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const res = await fetch(`${baseUrl}/api/v1/fgi/extract-guide-subjects`, { 
+      const res = await fetch(`${baseUrl}/api/fgi/extract-guide-subjects`, { 
         method: 'POST', 
         body: formData 
       });
@@ -761,7 +776,7 @@ export default function FGIAnalysisPage() {
   useEffect(() => {
     if (!user) return;
     const params = new URLSearchParams({ user_id: user.id, favorites: '1' });
-    fetch(`/api/fgi-analysis/rag?${params.toString()}`)
+    fetch(`/api/fgi-analysis/rag/rag-favorites?${params.toString()}`)
       .then(res => res.json())
       .then(data => {
         if (data.favorites) setFavorites(data.favorites);
@@ -785,26 +800,33 @@ export default function FGIAnalysisPage() {
 
   // 답변 저장 함수
   async function handleSaveQA(q: string, a: string, title: string, description: string) {
-    if (!user || !ragFileId || !ragChatGroupId) return;
-    setSavingQA(true);
-    // 파일명 가져오기
-    let fileName = fileNameForSave;
-    if (!fileName) {
-      const { data } = await supabase.from('fgi_doc_embeddings').select('file_name').eq('file_id', ragFileId).limit(1).single();
-      fileName = data?.file_name || '';
-      setFileNameForSave(fileName);
+    console.log('handleSaveQA called', q, a, title, description);
+    console.log('user', user);
+    console.log('ragFileId', ragFileId);
+    console.log('ragChatGroupId', ragChatGroupId);
+    if (!user || !ragFileId || !ragChatGroupId) {
+      console.log('필수 값 없음, return');
+      return;
     }
-    await supabase.from('fgi_rag_favorites').insert({
-      user_id: user.id,
-      file_id: ragFileId,
-      file_name: fileName,
-      chat_group_id: ragChatGroupId,
-      question: q,
-      answer: a,
-      title,
-      description
+    setSavingQA(true);
+    console.log('fetch 시작');
+    const res = await fetch('/api/fgi-analysis/rag/rag-favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: user.id,
+        file_id: ragFileId,
+        file_name: fileNameForSave,
+        chat_group_id: ragChatGroupId,
+        question: q,
+        answer: a,
+        title,
+        description
+      }),
     });
+    console.log('fetch 완료', res.status);
     setSavingQA(false);
+    if (res.ok) reloadFavorites();
   }
 
   // 복사 함수
@@ -822,6 +844,64 @@ export default function FGIAnalysisPage() {
       return;
     }
     setTopicResults([]);
+    // job_id 생성 및 전달
+    const job_id = crypto.randomUUID();
+    setIsProcessing(true);
+    setTopicProgress({total: selectedTopics.length + manualTopics.length, current: 0, completed: 0, summaries: []});
+    // WebSocket 연결
+    const wsUrl = (process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000").replace(/^http/, 'ws') + `/ws/fgi-topic-progress/${job_id}`;
+    const ws = new WebSocket(wsUrl);
+    topicWsRef.current = ws;
+    ws.onopen = () => {
+      const ping = setInterval(() => ws.send('ping'), 30000);
+      ws.onclose = () => clearInterval(ping);
+    };
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        // 진행상황 업데이트
+        if (data.current !== undefined && data.total !== undefined) {
+          setTopicProgress(prev => ({
+            ...prev,
+            current: data.current,
+            total: data.total,
+            completed: data.completed || prev.completed,
+          }));
+        }
+        // 주제별 요약 실시간 반영
+        if (data.topic_index !== undefined && data.topic_summary !== undefined) {
+          setTopicProgress(prev => {
+            const newSummaries = [...prev.summaries];
+            const topicNum = data.topic_index + 1;
+            const existingIdx = newSummaries.findIndex(s => s.topic === data.topic);
+            if (existingIdx !== -1) {
+              newSummaries[existingIdx] = {
+                ...newSummaries[existingIdx],
+                summary: data.topic_summary,
+                status: data.status || 'completed'
+              };
+            } else {
+              newSummaries.push({
+                topic: data.topic,
+                summary: data.topic_summary,
+                status: data.status || 'completed'
+              });
+            }
+            return {
+              ...prev,
+              summaries: newSummaries
+            };
+          });
+        }
+        // 분석 완료 시 처리
+        if (data.status === "completed" && data.current === data.total) {
+          setIsProcessing(false);
+          ws.close();
+        }
+      } catch (e) { /* ignore */ }
+    };
+    ws.onerror = (error) => { ws.close(); };
+    // 실제 분석 요청
     const formData = new FormData();
     formData.append('file_id', fgiDocumentId);
     formData.append('topics', JSON.stringify([...selectedTopics, ...manualTopics]));
@@ -829,23 +909,22 @@ export default function FGIAnalysisPage() {
       formData.append('user_id', user.id);
     }
     formData.append('analysis_tone', analysisTone);
+    formData.append('job_id', job_id);
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
-      const res = await fetch(`${baseUrl}/api/fgi-topic-analysis`, { 
-        method: 'POST', 
-        body: formData 
+      const res = await fetch('/api/fgi-analysis/subject-analyze', {
+        method: 'POST',
+        body: formData
       });
-      
       if (!res.ok) {
         throw new Error('주제별 분석 실패');
       }
-      
       const data = await res.json();
       setTopicResults(data.results || []);
-      console.log('주제별 분석 결과:', data.results);
     } catch (error) {
-      console.error('주제별 분석 오류:', error);
       alert(error instanceof Error ? error.message : '주제별 분석 중 오류가 발생했습니다.');
+    } finally {
+      setIsProcessing(false);
+      if (topicWsRef.current) topicWsRef.current.close();
     }
   };
 
@@ -864,6 +943,47 @@ export default function FGIAnalysisPage() {
     setFinalSummary("");
     setChunkProgress({ total: 0, current: 0, completed: 0, summaries: [] });
   }, [analysisMode]);
+
+  // 2. 저장 함수 추가
+  async function handleSaveSubjectAnalysis() {
+    if (!user || !fgiDocumentId || topicResults.length === 0 || !subjectSaveTitle.trim()) return;
+    setSavingSubject(true);
+    setSubjectSaveError(null);
+    try {
+      const res = await fetch('/api/fgi-analysis/subject-analyze/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          guide_file_name: guideFile?.name || '',
+          fgi_file_id: fgiDocumentId,
+          fgi_file_name: fgiDocumentFile?.name || '',
+          topics: [...selectedTopics, ...manualTopics],
+          results: topicResults,
+          title: subjectSaveTitle.trim(),
+          description: subjectSaveDescription.trim(),
+        }),
+      });
+      if (!res.ok) throw new Error('저장 실패');
+      setSavedSubject(true);
+      setTimeout(() => setSavedSubject(false), 2000);
+    } catch (e) {
+      setSubjectSaveError('저장 중 오류가 발생했습니다.');
+    } finally {
+      setSavingSubject(false);
+    }
+  }
+
+  // 1. 저장된 Q&A 목록 새로고침 함수 추가
+  function reloadFavorites() {
+    if (!user) return;
+    const params = new URLSearchParams({ user_id: user.id, favorites: '1' });
+    fetch(`/api/fgi-analysis/rag/rag-favorites?${params.toString()}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.favorites) setFavorites(data.favorites);
+      });
+  }
 
   if (authLoading) {
     return (
@@ -1235,116 +1355,195 @@ export default function FGIAnalysisPage() {
           </div>
         )}
         {analysisMode === "topic-analysis" && guideTopics.length > 0 && (
-          <>
-            <div className="w-full max-w-3xl mx-auto flex flex-col gap-6">
-              {/* 주제 선택 카드 */}
-              <Card className="mb-4 w-full shadow-lg border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-white dark:from-gray-900 dark:to-gray-800">
+          <div className="w-full max-w-3xl mx-auto flex flex-col gap-6">
+            {topicProgress.total > 0 && isProcessing && (
+              <Card className="mb-6">
                 <CardHeader>
-                  <CardTitle className="text-2xl font-bold text-blue-800 dark:text-blue-200 flex items-center gap-2">
-                    <FileText className="w-6 h-6 text-blue-500" /> 추출된 주제 선택
+                  <CardTitle className="flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                    주제별 분석 진행상황
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="py-6 px-8">
-                  <div className="flex flex-col gap-4">
-                    {/* 분석 분위기 선택 라디오 그룹 */}
-                    <div className="flex flex-row gap-6 items-center mb-2">
-                      <span className="font-semibold text-blue-700 dark:text-blue-200">분석 분위기:</span>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="radio" name="analysisTone" value="설명 중심" checked={analysisTone === "설명 중심"} onChange={() => setAnalysisTone("설명 중심")} className="accent-blue-500" />
-                        <span>설명 중심</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="radio" name="analysisTone" value="키워드 중심" checked={analysisTone === "키워드 중심"} onChange={() => setAnalysisTone("키워드 중심")} className="accent-blue-500" />
-                        <span>키워드 중심</span>
-                      </label>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="mb-4">
+                      <div className="flex justify-between text-sm text-gray-600 mb-2">
+                        <span>전체 진행률</span>
+                        <span>{topicProgress.completed}/{topicProgress.total}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                          style={{width: `${topicProgress.total > 0 ? (topicProgress.completed / topicProgress.total) * 100 : 0}%`}}
+                        ></div>
+                      </div>
                     </div>
-                    {/* 선택된 분위기 설명 */}
-                    <div className="mb-4 text-sm text-blue-500 dark:text-blue-300 min-h-[1.5em]">{TONE_DESCRIPTIONS[analysisTone]}</div>
-                    <div className="flex flex-wrap items-center gap-4 mb-2">
-                      <label className="font-medium flex items-center gap-2 text-blue-700 dark:text-blue-200 bg-blue-100 dark:bg-blue-900 px-3 py-1 rounded shadow-sm cursor-pointer">
-                        <input
-                          type="checkbox"
-                          ref={selectAllRef}
-                          checked={selectedTopics.length === allTopics.length && allTopics.length > 0}
-                          onChange={e => setSelectedTopics(e.target.checked ? allTopics : [])}
-                          className="accent-blue-500 w-5 h-5"
-                        />
-                        전체 선택
-                      </label>
-                      <span className="text-sm text-gray-400">({selectedTopics.length} / {allTopics.length} 선택됨)</span>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {allTopics.map((topic, idx) => {
-                        // 정규표현식으로 앞 숫자/기호 제거 (guideTopics만 적용, manualTopics는 그대로)
-                        const isManual = idx >= guideTopics.length;
-                        const cleanTopic = isManual ? topic : topic.replace(/^\s*[\d]+[.)\-:•▷]?\s*/, '');
-                        return (
-                          <label key={idx} className={`flex items-center gap-2 px-3 py-2 rounded-lg shadow-sm border border-blue-100 dark:border-blue-800 bg-white dark:bg-gray-900 hover:bg-blue-50 dark:hover:bg-blue-800 transition cursor-pointer ${selectedTopics.includes(topic) ? 'ring-2 ring-blue-400' : ''}`}>
-                            <input
-                              type="checkbox"
-                              checked={selectedTopics.includes(topic)}
-                              onChange={() => handleTopicCheckbox(topic)}
-                              className="accent-blue-500 w-5 h-5"
-                            />
-                            <span className="font-bold text-blue-700 dark:text-blue-200 mr-1">{idx + 1}.</span>
-                            <span className="truncate font-medium text-blue-900 dark:text-blue-100">{cleanTopic}</span>
-                            {isManual && (
-                              <button onClick={e => { e.stopPropagation(); setManualTopics(prev => prev.filter((_, i) => i !== (idx - guideTopics.length))); setSelectedTopics(prev => prev.filter(t => t !== topic)); }} className="ml-2 text-blue-600 hover:text-red-500 font-bold text-lg" title="삭제">×</button>
-                            )}
-                          </label>
-                        );
-                      })}
-                    </div>
+                    {topicProgress.current > 0 && (
+                      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                          <span className="font-medium">주제 {topicProgress.current} 분석 중...</span>
+                        </div>
+                      </div>
+                    )}
+                    {topicProgress.summaries.filter(s => s.status === 'completed').length > 0 && (
+                      <div className="space-y-3">
+                        <h4 className="font-medium text-gray-800">완료된 주제 요약</h4>
+                        <div className="max-h-64 overflow-y-auto space-y-3">
+                          {topicProgress.summaries
+                            .filter(s => s.status === 'completed')
+                            .map((summary, idx) => (
+                              <div key={summary.topic} className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <CheckCircle className="h-4 w-4 text-green-600" />
+                                  <span className="font-medium">{summary.topic}</span>
+                                </div>
+                                <div className="text-sm text-gray-700 whitespace-pre-line">
+                                  {summary.summary || `${summary.topic} 분석 완료`}
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
-              {/* 직접 주제 입력 (input) */}
-              <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center w-full">
-                <input
-                  type="text"
-                  className="border-2 border-blue-200 dark:border-blue-700 rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-blue-900 dark:bg-gray-800 text-blue-100 shadow-sm"
-                  placeholder="직접 주제 입력 후 Enter"
-                  value={manualTopicInput}
-                  onChange={e => setManualTopicInput(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.nativeEvent.isComposing) return;
-                    if (e.key === 'Enter' && manualTopicInput.trim()) {
-                      setManualTopics(prev => [...prev, manualTopicInput.trim()]);
-                      setManualTopicInput("");
-                    }
-                  }}
-                />
-              </div>
-              {/* 주제별 분석 실행 버튼 */}
-              <div className="w-full flex">
-                <Button
-                  className="w-full h-14 text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-lg transition"
-                  disabled={selectedTopics.length === 0 || !fgiDocumentId || isProcessing}
-                  onClick={handleTopicAnalysis}
-                >
-                  {isProcessing ? '분석 중...' : '주제별 분석 실행'}
-                </Button>
-              </div>
-              {/* 주제별 분석 결과 */}
-              {analysisMode === "topic-analysis" && topicResults.length > 0 && (
-                <Card className="w-full mb-8">
-                  <CardHeader>
-                    <CardTitle>주제별 분석 결과</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {topicResults.map((tr, idx) => (
-                        <div key={idx} className="bg-gray-50 p-4 rounded-lg border dark:bg-gray-800">
-                          <div className="font-semibold mb-1">{idx + 1}. {tr.topic}</div>
-                          <div className="text-sm whitespace-pre-line">{tr.result}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+            )}
+            {/* 주제 선택 카드 */}
+            <Card className="mb-4 w-full shadow-lg border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-white dark:from-gray-900 dark:to-gray-800">
+              <CardHeader>
+                <CardTitle className="text-2xl font-bold text-blue-800 dark:text-blue-200 flex items-center gap-2">
+                  <FileText className="w-6 h-6 text-blue-500" /> 추출된 주제 선택
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="py-6 px-8">
+                <div className="flex flex-col gap-4">
+                  {/* 분석 분위기 선택 라디오 그룹 */}
+                  <div className="flex flex-row gap-6 items-center mb-2">
+                    <span className="font-semibold text-blue-700 dark:text-blue-200">분석 분위기:</span>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="analysisTone" value="설명 중심" checked={analysisTone === "설명 중심"} onChange={() => setAnalysisTone("설명 중심")} className="accent-blue-500" />
+                      <span>설명 중심</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="analysisTone" value="키워드 중심" checked={analysisTone === "키워드 중심"} onChange={() => setAnalysisTone("키워드 중심")} className="accent-blue-500" />
+                      <span>키워드 중심</span>
+                    </label>
+                  </div>
+                  {/* 선택된 분위기 설명 */}
+                  <div className="mb-4 text-sm text-blue-500 dark:text-blue-300 min-h-[1.5em]">{TONE_DESCRIPTIONS[analysisTone]}</div>
+                  <div className="flex flex-wrap items-center gap-4 mb-2">
+                    <label className="font-medium flex items-center gap-2 text-blue-700 dark:text-blue-200 bg-blue-100 dark:bg-blue-900 px-3 py-1 rounded shadow-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        ref={selectAllRef}
+                        checked={selectedTopics.length === allTopics.length && allTopics.length > 0}
+                        onChange={e => setSelectedTopics(e.target.checked ? allTopics : [])}
+                        className="accent-blue-500 w-5 h-5"
+                      />
+                      전체 선택
+                    </label>
+                    <span className="text-sm text-gray-400">({selectedTopics.length} / {allTopics.length} 선택됨)</span>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {allTopics.map((topic, idx) => {
+                      // 정규표현식으로 앞 숫자/기호 제거 (guideTopics만 적용, manualTopics는 그대로)
+                      const isManual = idx >= guideTopics.length;
+                      const cleanTopic = isManual ? topic : topic.replace(/^\s*[\d]+[.)\-:•▷]?\s*/, '');
+                      return (
+                        <label key={idx} className={`flex items-center gap-2 px-3 py-2 rounded-lg shadow-sm border border-blue-100 dark:border-blue-800 bg-white dark:bg-gray-900 hover:bg-blue-50 dark:hover:bg-blue-800 transition cursor-pointer ${selectedTopics.includes(topic) ? 'ring-2 ring-blue-400' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={selectedTopics.includes(topic)}
+                            onChange={() => handleTopicCheckbox(topic)}
+                            className="accent-blue-500 w-5 h-5"
+                          />
+                          <span className="font-bold text-blue-700 dark:text-blue-200 mr-1">{idx + 1}.</span>
+                          <span className="truncate font-medium text-blue-900 dark:text-blue-100">{cleanTopic}</span>
+                          {isManual && (
+                            <button onClick={e => { e.stopPropagation(); setManualTopics(prev => prev.filter((_, i) => i !== (idx - guideTopics.length))); setSelectedTopics(prev => prev.filter(t => t !== topic)); }} className="ml-2 text-blue-600 hover:text-red-500 font-bold text-lg" title="삭제">×</button>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            {/* 직접 주제 입력 (input) */}
+            <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center w-full">
+              <input
+                type="text"
+                className="border-2 border-blue-200 dark:border-blue-700 rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-blue-900 dark:bg-gray-800 text-blue-100 shadow-sm"
+                placeholder="직접 주제 입력 후 Enter"
+                value={manualTopicInput}
+                onChange={e => setManualTopicInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.nativeEvent.isComposing) return;
+                  if (e.key === 'Enter' && manualTopicInput.trim()) {
+                    setManualTopics(prev => [...prev, manualTopicInput.trim()]);
+                    setManualTopicInput("");
+                  }
+                }}
+              />
             </div>
-          </>
+            {/* 주제별 분석 실행 버튼 */}
+            <div className="w-full flex">
+              <Button
+                className="w-full h-14 text-lg font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-lg transition"
+                disabled={selectedTopics.length === 0 || !fgiDocumentId || isProcessing}
+                onClick={handleTopicAnalysis}
+              >
+                {isProcessing ? '분석 중...' : '주제별 분석 실행'}
+              </Button>
+            </div>
+            {/* 주제별 분석 결과 */}
+            {topicResults.length > 0 && (
+              <Card className="w-full mb-8">
+                <CardHeader>
+                  <CardTitle>주제별 분석 결과</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {topicResults.map((tr, idx) => (
+                      <div key={idx} className="bg-gray-50 p-4 rounded-lg border dark:bg-gray-800">
+                        <div className="font-semibold mb-1">{idx + 1}. {tr.topic}</div>
+                        <div className="text-sm whitespace-pre-line">{tr.result}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* 저장 UI: 모든 분석이 끝나고(isProcessing이 false)일 때만 노출 */}
+                  {!isProcessing && (
+                    <div className="mt-6 flex flex-col gap-2">
+                      <label className="font-medium">제목 *</label>
+                      <input
+                        type="text"
+                        className="border rounded px-3 py-2"
+                        value={subjectSaveTitle}
+                        onChange={e => setSubjectSaveTitle(e.target.value)}
+                        placeholder="분석 제목을 입력하세요"
+                      />
+                      <label className="font-medium mt-2">설명 (선택)</label>
+                      <textarea
+                        className="border rounded px-3 py-2"
+                        value={subjectSaveDescription}
+                        onChange={e => setSubjectSaveDescription(e.target.value)}
+                        placeholder="분석에 대한 설명을 입력하세요"
+                        rows={2}
+                      />
+                      <Button onClick={handleSaveSubjectAnalysis} disabled={savingSubject || !subjectSaveTitle.trim()} className="w-full mt-2">
+                        <Save className="mr-2 h-4 w-4" />
+                        {savingSubject ? '저장 중...' : savedSubject ? '저장 완료!' : '분석 결과 저장'}
+                      </Button>
+                      {subjectSaveError && <div className="text-red-600 text-sm">{subjectSaveError}</div>}
+                      {savedSubject && <div className="text-green-600 text-sm">저장되었습니다.</div>}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
         )}
         {analysisMode === 'doc-rag' && ragFileId && (
           <div className="w-full h-full flex flex-col" style={{ minHeight: '70vh' }}>
@@ -1557,6 +1756,16 @@ export default function FGIAnalysisPage() {
             </div>
           </div>
         )}
+        <SaveQAModal
+          open={!!saveQAModal?.open}
+          onClose={() => setSaveQAModal(null)}
+          onSave={(title, description) => {
+            if (saveQAModal) handleSaveQA(saveQAModal.q, saveQAModal.a, title, description);
+          }}
+          question={saveQAModal?.q || ""}
+          answer={saveQAModal?.a || ""}
+          fileName={fileNameForSave}
+        />
       </main>
     </div>
   );
