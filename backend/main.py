@@ -16,7 +16,7 @@ from app.fgi.api.ws_router import ws_router as fgi_ws_router
 from app.planner.api.ws_router import ws_router as planner_ws_router
 from app.fgi_rag.api.router import router as fgi_rag_router
 from app.fgi_rag.api.ws_router import ws_router as fgi_subject_ws_router
-
+from app.fgi_group_analysis.api.group_analysis_router import router as fgi_group_analysis_router
 
 app = FastAPI(title="Survey AI Backend", version="1.0.0")
 # CORS 설정
@@ -35,6 +35,7 @@ app.include_router(fgi_router, prefix="/api/fgi")
 app.include_router(batch_analysis_router, prefix="/api/batch-analysis")
 app.include_router(visualization_router, prefix="/api/visualization")
 app.include_router(fgi_rag_router, prefix="/api/fgi-rag")
+app.include_router(fgi_group_analysis_router, prefix="/api")
 # WebSocket 라우터는 prefix 없이 등록
 app.include_router(fgi_ws_router)
 app.include_router(planner_ws_router)

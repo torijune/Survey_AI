@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,7 +44,8 @@ const MODE_TOP_DESC = {
   'audio': 'FGI 회의 음성 파일등 회의 내용 음성 파일을 업로드하면 자동으로 텍스트로 변환 후, 회의 전반적인 내용을 요약하여 자연어 형태로 분석·정리합니다.',
   'doc-summary': 'FGI 회의록 등 회의 내용 관련 회의 전반적인 내용을 요약하여 자연어 형태로 분석·정리합니다.',
   'doc-rag': 'FGI 회의록 등 문서를 업로드한 뒤 궁금한 점을 자유롭게 질문하면, AI가 문서 내용을 바탕으로 근거와 함께 답변을 제공합니다. (RAG 기반 질의응답)',
-  'topic-analysis': 'FGI 가이드라인에서 주제를 추출하여 원하는 주제별로 분석을 진행합니다. 가이드라인 파일(docx) 업로드 후 주제를 선택하거나 직접 입력할 수 있습니다.'
+  'topic-analysis': 'FGI 가이드라인에서 주제를 추출하여 원하는 주제별로 분석을 진행합니다. 가이드라인 파일(docx) 업로드 후 주제를 선택하거나 직접 입력할 수 있습니다.',
+  'group-analysis': '여러 그룹의 FGI 주제별 분석 결과를 한 번에 비교·분석합니다. 가이드라인 파일을 업로드하면, 해당 가이드라인으로 분석된 모든 그룹의 결과를 불러와 비교할 수 있습니다.'
 };
 
 // 1. 분석 분위기별 설명 텍스트
@@ -117,7 +118,7 @@ export default function FGIAnalysisPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [progress, setProgress] = useState<string>("");
-  const [analysisMode, setAnalysisMode] = useState<'audio' | 'doc-summary' | 'doc-rag' | 'topic-analysis'>('audio');
+  const [analysisMode, setAnalysisMode] = useState<'audio' | 'doc-summary' | 'doc-rag' | 'topic-analysis' | 'group-analysis'>('audio');
   const [sidebarWidth, setSidebarWidth] = useState(340);
   const dragging = useRef(false);
   const [showChunks, setShowChunks] = useState(false);
@@ -186,6 +187,11 @@ export default function FGIAnalysisPage() {
   const [showExistingTopicsModal, setShowExistingTopicsModal] = useState(false);
   const [existingTopics, setExistingTopics] = useState<string[]>([]);
   const [isCheckingExistingTopics, setIsCheckingExistingTopics] = useState(false);
+  // group-analysis 상태 추가
+  const [groupAnalysisResults, setGroupAnalysisResults] = useState<any>({});
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+  const [groupAnalysisLoading, setGroupAnalysisLoading] = useState(false);
+  const [groupAnalysisError, setGroupAnalysisError] = useState<string | null>(null);
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -1059,6 +1065,29 @@ export default function FGIAnalysisPage() {
       });
   }
 
+  // group-analysis용 가이드라인 업로드 핸들러
+  const handleGroupGuideUpload = useCallback(async (file: File) => {
+    setGuideFile(file);
+    setGroupAnalysisLoading(true);
+    setGroupAnalysisError(null);
+    setGroupAnalysisResults({});
+    setSelectedGroups([]);
+    try {
+      const params = new URLSearchParams({
+        guide_file_name: file.name,
+        user_id: user?.id || ""
+      });
+      const res = await fetch(`/api/fgi_group_analysis?${params.toString()}`);
+      if (!res.ok) throw new Error('그룹별 분석 결과 조회 실패');
+      const data = await res.json();
+      setGroupAnalysisResults(data.groups || {});
+    } catch (e: any) {
+      setGroupAnalysisError(e.message || '그룹별 분석 결과 조회 중 오류가 발생했습니다.');
+    } finally {
+      setGroupAnalysisLoading(false);
+    }
+  }, [user]);
+
   if (authLoading) {
     return (
       <div className="w-full max-w-screen-xl px-8 py-12 mx-auto dark:bg-gray-900 dark:text-gray-100">
@@ -1138,6 +1167,21 @@ export default function FGIAnalysisPage() {
               {analysisMode === 'topic-analysis' && (
                 <div className="ml-6 mt-1 text-sm text-gray-600 dark:text-gray-300 whitespace-pre-line">
                   FGI 가이드라인에서 주제를 추출하여 원하는 주제별로 분석을 진행합니다. 가이드라인 파일(docx) 업로드 후 주제를 선택하거나 직접 입력할 수 있습니다.
+                </div>
+              )}
+              <label className="flex flex-row items-center cursor-pointer gap-2">
+                <input
+                  type="radio"
+                  name="analysisMode"
+                  value="group-analysis"
+                  checked={analysisMode === "group-analysis"}
+                  onChange={() => setAnalysisMode('group-analysis')}
+                />
+                <span>그룹별 분석</span>
+              </label>
+              {analysisMode === 'group-analysis' && (
+                <div className="ml-6 mt-1 text-sm text-gray-600 dark:text-gray-300 whitespace-pre-line">
+                  여러 그룹의 FGI 주제별 분석 결과를 한 번에 비교·분석합니다. 가이드라인 파일을 업로드하면, 해당 가이드라인으로 분석된 모든 그룹의 결과를 불러와 비교할 수 있습니다.
                 </div>
               )}
             </div>
@@ -1302,6 +1346,32 @@ export default function FGIAnalysisPage() {
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+        )}
+        {/* group-analysis 모드일 때 파일 업로드 UI 추가 */}
+        {analysisMode === "group-analysis" && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <FileText className="mr-2 h-5 w-5" />
+                가이드라인 파일 업로드 (비교 기준)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <RagDropzone onFile={handleGroupGuideUpload} lang={lang} />
+              {guideFile && guideFile.name && (
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg dark:bg-green-900 dark:border-green-700 mt-2">
+                  <div className="flex items-center">
+                    <CheckCircle className="h-4 w-4 text-green-600 mr-2" />
+                    <span className="text-sm text-green-800 dark:text-green-200">
+                      가이드라인 파일 업로드됨: {guideFile.name}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {groupAnalysisLoading && <div className="text-sm text-blue-500 mt-2 flex items-center"><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500 mr-2"></div>그룹별 분석 결과 불러오는 중...</div>}
+              {groupAnalysisError && <div className="text-sm text-red-500 mt-2">{groupAnalysisError}</div>}
             </CardContent>
           </Card>
         )}
@@ -1893,6 +1963,44 @@ export default function FGIAnalysisPage() {
                 </Button>
               </div>
             </div>
+          </div>
+        )}
+        {analysisMode === "group-analysis" && guideFile && !groupAnalysisLoading && Object.keys(groupAnalysisResults).length > 0 && (
+          <div className="w-full max-w-5xl mx-auto flex flex-col gap-8">
+            <h2 className="text-xl font-bold mb-2">그룹별 분석 결과</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {Object.entries(groupAnalysisResults).map(([group, analyses]: any) => (
+                <Card key={group} className={`hover:shadow-lg transition-shadow border-2 ${selectedGroups.includes(group) ? 'border-blue-500' : 'border-gray-200 dark:border-gray-700'}`}>
+                  <CardHeader className="flex flex-row items-center justify-between cursor-pointer select-none">
+                    <div className="flex-1">
+                      <div className="font-bold text-base mb-1 flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedGroups.includes(group)}
+                          onChange={() => setSelectedGroups(selectedGroups.includes(group) ? selectedGroups.filter(g => g !== group) : [...selectedGroups, group])}
+                          className="accent-blue-500 w-5 h-5 mr-2"
+                        />
+                        {group}
+                      </div>
+                      <div className="text-xs text-gray-500 mb-1">분석 {analyses.length}건</div>
+                      <div className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">
+                        {analyses[0]?.description || analyses[0]?.title || '설명 없음'}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-0 pb-4">
+                    <div className="prose dark:prose-invert max-w-none text-xs">
+                      {/* 대표 주제 일부만 노출 */}
+                      {Array.isArray(analyses[0]?.topics) && analyses[0].topics.slice(0, 3).map((topic: string, idx: number) => (
+                        <div key={idx} className="mb-1">• {topic}</div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-2">최근 분석: {analyses[0]?.created_at?.slice(0, 10)}</div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            {/* 비교 버튼 등은 추후 추가 */}
           </div>
         )}
       </main>
