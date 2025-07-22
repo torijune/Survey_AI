@@ -180,4 +180,23 @@ async def rag_qa(
         answer = await workflow.service.analyze_topic(question, context)
         return {"answer": answer, "context": context, "chunks": [c.chunk_text for c in chunks], "chat_group_id": chat_group_id}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/guide-topics")
+async def get_guide_topics(guide_file_name: str, user_id: str):
+    """가이드라인 파일명으로 기존 주제 목록 반환 (있으면)"""
+    supabase = get_supabase()
+    try:
+        res = supabase.table('fgi_subject_analyses') \
+            .select('topics') \
+            .eq('guide_file_name', guide_file_name) \
+            .eq('user_id', user_id) \
+            .order('created_at', desc=True) \
+            .limit(1) \
+            .execute()
+        if hasattr(res, 'data') and res.data and len(res.data) > 0:
+            topics = res.data[0]['topics']
+            return {"topics": topics}
+        return {"topics": []}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 

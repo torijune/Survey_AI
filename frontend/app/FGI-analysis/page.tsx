@@ -182,6 +182,10 @@ export default function FGIAnalysisPage() {
   }>({total: 0, current: 0, completed: 0, summaries: []});
   const topicWsRef = useRef<WebSocket | null>(null);
   const [groupName, setGroupName] = useState("");
+  // 기존 주제 확인 관련 상태 추가
+  const [showExistingTopicsModal, setShowExistingTopicsModal] = useState(false);
+  const [existingTopics, setExistingTopics] = useState<string[]>([]);
+  const [isCheckingExistingTopics, setIsCheckingExistingTopics] = useState(false);
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -730,6 +734,33 @@ export default function FGIAnalysisPage() {
     setGuideFile(file);
     setGuideTopics([]);
     
+    // 1. 먼저 기존 주제 확인
+    setIsCheckingExistingTopics(true);
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
+      const params = new URLSearchParams({
+        guide_file_name: file.name,
+        user_id: user?.id || ""
+      });
+      const existingRes = await fetch(`${baseUrl}/api/fgi-rag/guide-topics?${params.toString()}`);
+      
+      if (existingRes.ok) {
+        const existingData = await existingRes.json();
+        if (existingData.topics && existingData.topics.length > 0) {
+          // 기존 주제가 있으면 모달 표시
+          setExistingTopics(existingData.topics);
+          setShowExistingTopicsModal(true);
+          setIsCheckingExistingTopics(false);
+          setGuideLoading(false);
+          return;
+        }
+      }
+    } catch (error) {
+      console.error('기존 주제 확인 중 오류:', error);
+    }
+    setIsCheckingExistingTopics(false);
+    
+    // 2. 기존 주제가 없으면 LLM으로 주제 추출
     const formData = new FormData();
     formData.append('file', file);
     
@@ -755,6 +786,47 @@ export default function FGIAnalysisPage() {
       setGuideLoading(false);
     }
   }
+
+  // 기존 주제 사용 선택 핸들러
+  const handleUseExistingTopics = () => {
+    setGuideTopics(existingTopics);
+    setShowExistingTopicsModal(false);
+    setExistingTopics([]);
+  };
+  
+  // 새로 주제 추출 선택 핸들러
+  const handleExtractNewTopics = async () => {
+    if (!guideFile) return;
+    
+    setShowExistingTopicsModal(false);
+    setExistingTopics([]);
+    setGuideLoading(true);
+    
+    const formData = new FormData();
+    formData.append('file', guideFile);
+    
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
+      const res = await fetch(`${baseUrl}/api/fgi/extract-guide-subjects`, { 
+        method: 'POST', 
+        body: formData 
+      });
+      
+      if (!res.ok) {
+        throw new Error('가이드라인에서 주제 추출 실패');
+      }
+      
+      const data = await res.json();
+      setGuideTopics(data.subjects || []);
+      console.log('새로 추출된 주제들:', data.subjects);
+    } catch (error) {
+      console.error('가이드라인 업로드 오류:', error);
+      setGuideError(error instanceof Error ? error.message : '가이드라인 처리 중 오류가 발생했습니다.');
+      setGuideFile(null);
+    } finally {
+      setGuideLoading(false);
+    }
+  };
 
   // RAG 대화 이력 불러오기 (세션별)
   async function loadRagChatHistory(groupId?: string) {
@@ -1147,6 +1219,12 @@ export default function FGIAnalysisPage() {
                   </div>
                 </div>
               )}
+                {isCheckingExistingTopics && (
+                  <div className="text-sm text-blue-500 mt-2 flex items-center">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500 mr-2"></div>
+                    기존 주제 확인 중...
+                  </div>
+                )}
                 {guideLoading && <div className="text-sm text-gray-500 mt-2">가이드라인에서 주제 추출 중...</div>}
                 {guideError && <div className="text-sm text-red-500 mt-2">{guideError}</div>}
             </CardContent>
@@ -1776,6 +1854,47 @@ export default function FGIAnalysisPage() {
           answer={saveQAModal?.a || ""}
           fileName={fileNameForSave}
         />
+        {/* 기존 주제 선택 모달 */}
+        {showExistingTopicsModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-900 p-6 rounded-lg shadow-lg w-full max-w-lg max-h-[80vh] overflow-y-auto">
+              <h2 className="text-lg font-bold mb-4 flex items-center">
+                <FileText className="mr-2 h-5 w-5" />
+                기존 주제 발견
+              </h2>
+              <div className="mb-4">
+                <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">
+                  같은 가이드라인 파일로 이전에 분석한 주제들이 있습니다.
+                </p>
+                <div className="bg-blue-50 dark:bg-blue-900 p-3 rounded-lg">
+                  <p className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">기존 주제 목록:</p>
+                  <div className="space-y-1">
+                    {existingTopics.map((topic, idx) => (
+                      <div key={idx} className="text-sm text-blue-700 dark:text-blue-300">
+                        {idx + 1}. {topic.replace(/^\s*[\d]+[.)\-:•▷]?\s*/, '')}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-3 justify-end">
+                <Button 
+                  variant="outline" 
+                  onClick={handleExtractNewTopics}
+                  className="flex-1"
+                >
+                  새로 추출
+                </Button>
+                <Button 
+                  onClick={handleUseExistingTopics}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700"
+                >
+                  기존 주제 사용
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
