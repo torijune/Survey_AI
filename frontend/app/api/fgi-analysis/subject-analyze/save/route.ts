@@ -10,6 +10,9 @@ export async function POST(req: NextRequest) {
   formData.append('fgi_file_name', body.fgi_file_name);
   formData.append('topics', JSON.stringify(body.topics));
   formData.append('results', JSON.stringify(body.results));
+  formData.append('title', body.title);
+  formData.append('description', body.description);
+  formData.append('group_name', body.group_name);
 
   const backendUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || 'http://localhost:8000';
   const response = await fetch(`${backendUrl}/api/fgi-rag/save-subject-analysis`, {

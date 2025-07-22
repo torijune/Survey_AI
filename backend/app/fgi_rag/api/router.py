@@ -94,30 +94,40 @@ async def analyze_fgi_rag(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/save-subject-analysis")
-async def save_subject_analysis(
-    user_id: str = Form(...),
-    guide_file_name: str = Form(...),
-    fgi_file_id: str = Form(...),
-    fgi_file_name: str = Form(...),
-    topics: str = Form(...),  # JSON string
-    results: str = Form(...), # JSON string
-):
-    """주제별 분석 결과를 fgi_subject_analyses 테이블에 저장"""
+async def save_subject_analysis(request: Request):
     import json
     import uuid
     from datetime import datetime
     supabase = get_supabase()
     try:
+        form = await request.form()
+        data = {k: form.get(k) for k in form.keys()}
+        print("Received data:", data)
+        user_id = data.get("user_id")
+        guide_file_name = data.get("guide_file_name")
+        fgi_file_id = data.get("fgi_file_id")
+        fgi_file_name = data.get("fgi_file_name")
+        topics = data.get("topics")
+        results = data.get("results")
+        title = data.get("title")
+        description = data.get("description")
+        group_name = data.get("group_name")
+        topics_val = topics if isinstance(topics, (list, dict)) else json.loads(topics) if topics else []
+        results_val = results if isinstance(results, (list, dict)) else json.loads(results) if results else []
         row = {
             "id": str(uuid.uuid4()),
             "user_id": user_id,
             "guide_file_name": guide_file_name,
             "fgi_file_id": fgi_file_id,
             "fgi_file_name": fgi_file_name,
-            "topics": json.loads(topics),
-            "results": json.loads(results),
+            "topics": topics_val,
+            "results": results_val,
+            "title": title,
+            "description": description,
+            "group_name": group_name,
             "created_at": datetime.utcnow().isoformat()
         }
+        print("Saving FGI subject analysis row:", row)
         res = supabase.table('fgi_subject_analyses').insert(row).execute()
         if getattr(res, 'error', None):
             raise Exception(res.error)

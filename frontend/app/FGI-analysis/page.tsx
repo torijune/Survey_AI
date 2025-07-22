@@ -181,6 +181,7 @@ export default function FGIAnalysisPage() {
     summaries: Array<{topic: string, summary: string, status: 'pending' | 'processing' | 'completed' | 'error'}>;
   }>({total: 0, current: 0, completed: 0, summaries: []});
   const topicWsRef = useRef<WebSocket | null>(null);
+  const [groupName, setGroupName] = useState("");
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -962,6 +963,7 @@ export default function FGIAnalysisPage() {
           results: topicResults,
           title: subjectSaveTitle.trim(),
           description: subjectSaveDescription.trim(),
+          group_name: groupName.trim(),
         }),
       });
       if (!res.ok) throw new Error('저장 실패');
@@ -1531,6 +1533,14 @@ export default function FGIAnalysisPage() {
                         onChange={e => setSubjectSaveDescription(e.target.value)}
                         placeholder="분석에 대한 설명을 입력하세요"
                         rows={2}
+                      />
+                      <label className="font-medium mt-2">그룹명 (선택)</label>
+                      <input
+                        type="text"
+                        className="border rounded px-3 py-2"
+                        value={groupName}
+                        onChange={e => setGroupName(e.target.value)}
+                        placeholder="분석 그룹명을 입력하세요 (예: 2024년 7월 FGI 1차)"
                       />
                       <Button onClick={handleSaveSubjectAnalysis} disabled={savingSubject || !subjectSaveTitle.trim()} className="w-full mt-2">
                         <Save className="mr-2 h-4 w-4" />

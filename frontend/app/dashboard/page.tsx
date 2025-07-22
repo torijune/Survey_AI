@@ -54,7 +54,11 @@ const TEXT = {
   workflow_steps: { "한국어": "워크플로우 단계", "English": "Workflow Steps" },
   batch_analysis: { "한국어": "일괄 분석", "English": "Batch Analysis" },
   single_analysis: { "한국어": "단일 분석", "English": "Single Analysis" },
-  last_updated: { "한국어": "최근 업데이트", "English": "Last Updated" }
+  last_updated: { "한국어": "최근 업데이트", "English": "Last Updated" },
+  fgi_subject_analysis: { "한국어": "FGI 주제 분석", "English": "FGI Subject Analysis" },
+  guide_file: { "한국어": "가이드 파일", "English": "Guide File" },
+  fgi_file: { "한국어": "FGI 파일", "English": "FGI File" },
+  topics_count: { "한국어": "주제 수", "English": "Topics Count" }
 };
 
 interface SurveyPlan {
@@ -103,6 +107,19 @@ interface FGIAnalysis {
   summary_result: any;
 }
 
+interface FGISubjectAnalysis {
+  id: string;
+  user_id: string;
+  fgi_file_id: string;
+  topics: any[];
+  results: any;
+  created_at: string;
+  guide_file_name: string;
+  title: string;
+  fgi_file_name: string;
+  description: string;
+}
+
 export default function DashboardPage() {
   const { lang } = useLanguage();
   const { user, loading: authLoading } = useAuth('/dashboard');
@@ -110,7 +127,9 @@ export default function DashboardPage() {
   const [analyses, setAnalyses] = useState<SurveyAnalysis[]>([]);
   const [visualizations, setVisualizations] = useState<SurveyVisualization[]>([]);
   const [fgiAnalyses, setFgiAnalyses] = useState<FGIAnalysis[]>([]);
-  const [fgiTopicAnalyses, setFgiTopicAnalyses] = useState<any[]>([]);
+  // FGI 주제별 분석 관련 상태 제거
+  // const [fgiTopicAnalyses, setFgiTopicAnalyses] = useState<any[]>([]);
+  const [fgiSubjectAnalyses, setFgiSubjectAnalyses] = useState<FGISubjectAnalysis[]>([]);
   const [ragSessions, setRagSessions] = useState<any[]>([]);
   const [favorites, setFavorites] = useState<any[]>([]);
   const [copySuccessQA, setCopySuccessQA] = useState<string | null>(null);
@@ -179,7 +198,17 @@ export default function DashboardPage() {
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
       if (!fgiTopicAnalysesResponse.error && fgiTopicAnalysesResponse.data) {
-        setFgiTopicAnalyses(fgiTopicAnalysesResponse.data);
+        // setFgiTopicAnalyses(fgiTopicAnalysesResponse.data); // 이 부분 제거
+      }
+
+      // FGI 주제 분석 로드 (fgi_subject_analyses)
+      const fgiSubjectAnalysesResponse = await supabase
+        .from('fgi_subject_analyses')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (!fgiSubjectAnalysesResponse.error && fgiSubjectAnalysesResponse.data) {
+        setFgiSubjectAnalyses(fgiSubjectAnalysesResponse.data);
       }
     } catch (error) {
       console.error('데이터 로드 오류:', error);
@@ -242,7 +271,7 @@ export default function DashboardPage() {
     }
   }, [user, loadData, loadRagSessions, loadFavorites]);
 
-  const handleDelete = async (type: 'plan' | 'analysis' | 'visualization' | 'fgi-analysis', id: string) => {
+  const handleDelete = async (type: 'plan' | 'analysis' | 'visualization' | 'fgi-analysis' | 'fgi-subject-analysis', id: string) => {
     if (!confirm(TEXT.confirm_delete[lang])) return;
     
     try {
@@ -254,20 +283,37 @@ export default function DashboardPage() {
       const endpoint = type === 'plan' ? '/api/survey-plans' : 
                       type === 'analysis' ? '/api/survey-analyses' : 
                       type === 'fgi-analysis' ? '/api/fgi-analyses' :
+                      type === 'fgi-subject-analysis' ? null :
                       '/api/survey-visualizations';
 
-      const response = await fetch(`${endpoint}/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`
-        }
-      });
+      if (type === 'fgi-subject-analysis') {
+        // FGI 주제 분석은 Supabase에서 직접 삭제
+        const { error } = await supabase
+          .from('fgi_subject_analyses')
+          .delete()
+          .eq('id', id)
+          .eq('user_id', user?.id);
 
-      if (response.ok) {
+        if (error) {
+          throw new Error('삭제에 실패했습니다.');
+        }
+        
         // 데이터 다시 로드
         loadData();
       } else {
-        throw new Error('삭제에 실패했습니다.');
+        const response = await fetch(`${endpoint}/${id}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`
+          }
+        });
+
+        if (response.ok) {
+          // 데이터 다시 로드
+          loadData();
+        } else {
+          throw new Error('삭제에 실패했습니다.');
+        }
       }
     } catch (error) {
       console.error('삭제 오류:', error);
@@ -339,14 +385,14 @@ export default function DashboardPage() {
           {TEXT.overview[lang]}
         </h2>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
           {/* 총 항목 수 */}
           <Card className="bg-blue-50 border-blue-200 dark:bg-blue-900 dark:border-blue-700">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-blue-600 dark:text-blue-200">{TEXT.total_items[lang]}</p>
-                  <p className="text-2xl font-bold text-blue-800 dark:text-blue-100">{plans.length + analyses.length + visualizations.length + fgiAnalyses.length}</p>
+                  <p className="text-2xl font-bold text-blue-800 dark:text-blue-100">{plans.length + analyses.length + visualizations.length + fgiAnalyses.length + fgiSubjectAnalyses.length}</p>
                 </div>
                 <TrendingUp className="h-8 w-8 text-blue-600 dark:text-blue-200" />
               </div>
@@ -401,6 +447,19 @@ export default function DashboardPage() {
                   <p className="text-2xl font-bold text-sky-800 dark:text-sky-100">{fgiAnalyses.length}</p>
                 </div>
                 <Users className="h-8 w-8 text-sky-600 dark:text-sky-200" />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* FGI 주제 분석 수 */}
+          <Card className="bg-indigo-50 border-indigo-200 dark:bg-indigo-900 dark:border-indigo-700">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-indigo-600 dark:text-indigo-200">{TEXT.fgi_subject_analysis[lang]}</p>
+                  <p className="text-2xl font-bold text-indigo-800 dark:text-indigo-100">{fgiSubjectAnalyses.length}</p>
+                </div>
+                <FileText className="h-8 w-8 text-indigo-600 dark:text-indigo-200" />
               </div>
             </CardContent>
           </Card>
@@ -470,7 +529,8 @@ export default function DashboardPage() {
                       ...plans.map(p => ({ ...p, type: 'plan' as const })),
                       ...analyses.map(a => ({ ...a, type: 'analysis' as const })),
                       ...visualizations.map(v => ({ ...v, type: 'visualization' as const })),
-                      ...fgiAnalyses.map(f => ({ ...f, type: 'fgi' as const }))
+                      ...fgiAnalyses.map(f => ({ ...f, type: 'fgi' as const })),
+                      ...fgiSubjectAnalyses.map(f => ({ ...f, type: 'fgi-subject' as const }))
                     ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                     .slice(0, 5);
 
@@ -481,10 +541,13 @@ export default function DashboardPage() {
                             item.type === 'plan' ? 'bg-green-500' :
                             item.type === 'analysis' ? 'bg-purple-500' :
                             item.type === 'visualization' ? 'bg-orange-500' :
+                            item.type === 'fgi-subject' ? 'bg-indigo-500' :
                             'bg-sky-500'
                           }`} />
                           <span className="truncate max-w-32">
-                            {item.type === 'plan' ? item.topic : item.title}
+                            {item.type === 'plan' ? item.topic : 
+                             item.type === 'fgi-subject' ? (item.title || 'FGI 주제 분석') : 
+                             item.title}
                           </span>
                         </div>
                         <span className="text-xs text-gray-500">
@@ -518,9 +581,14 @@ export default function DashboardPage() {
             <Users className="h-4 w-4" />
             FGI 분석 ({fgiAnalyses.length})
           </TabsTrigger>
-          <TabsTrigger value="fgi-topic-analyses" className="flex items-center gap-2">
+          {/* TabsList에서 FGI 주제별 분석 탭 제거 */}
+          {/* <TabsTrigger value="fgi-topic-analyses" className="flex items-center gap-2">
             <FileText className="h-4 w-4" />
             FGI 주제별 분석 ({fgiTopicAnalyses.length})
+          </TabsTrigger> */}
+          <TabsTrigger value="fgi-subject-analyses" className="flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            {TEXT.fgi_subject_analysis[lang]} ({fgiSubjectAnalyses.length})
           </TabsTrigger>
           <TabsTrigger value="favorites">FGI 질의 응답</TabsTrigger>
         </TabsList>
@@ -909,7 +977,8 @@ export default function DashboardPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="fgi-topic-analyses" className="mt-6">
+        {/* FGI 주제별 분석 탭 내용 제거 */}
+        {/* <TabsContent value="fgi-topic-analyses" className="mt-6">
           {fgiTopicAnalyses.length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">
@@ -947,6 +1016,68 @@ export default function DashboardPage() {
                         <Button size="sm" variant="outline" className="flex-1">
                           <Eye className="h-3 w-3 mr-1" />
                           상세 보기
+                        </Button>
+                      </Link>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent> */}
+
+        <TabsContent value="fgi-subject-analyses">
+          {fgiSubjectAnalyses.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <p className="text-gray-500">{TEXT.no_data[lang]}</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {fgiSubjectAnalyses.map((item) => (
+                <Card key={item.id} className="hover:shadow-lg transition-shadow">
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center justify-between">
+                      <span className="truncate">{item.title || 'FGI 주제 분석'}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDelete('fgi-subject-analysis', item.id)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {item.description && (
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">{TEXT.description[lang]}</p>
+                        <p className="text-sm text-gray-800 line-clamp-2">{item.description}</p>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">{TEXT.guide_file[lang]}</p>
+                      <p className="text-sm text-gray-800 truncate">{item.guide_file_name}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">{TEXT.fgi_file[lang]}</p>
+                      <p className="text-sm text-gray-800 truncate">{item.fgi_file_name}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">{TEXT.topics_count[lang]}</p>
+                      <p className="text-sm text-gray-800">{item.topics?.length || 0}개</p>
+                    </div>
+                    <div className="flex items-center text-xs text-gray-500">
+                      <Calendar className="h-3 w-3 mr-1" />
+                      {formatDate(item.created_at)}
+                    </div>
+                    <div className="flex gap-2">
+                      <Link href={`/dashboard/fgi-subject-analyses/${item.id}`}>
+                        <Button size="sm" variant="outline" className="flex-1">
+                          <Eye className="h-3 w-3 mr-1" />
+                          {TEXT.view[lang]}
                         </Button>
                       </Link>
                     </div>
