@@ -56,9 +56,12 @@ const TEXT = {
   single_analysis: { "한국어": "단일 분석", "English": "Single Analysis" },
   last_updated: { "한국어": "최근 업데이트", "English": "Last Updated" },
   fgi_subject_analysis: { "한국어": "FGI 주제 분석", "English": "FGI Subject Analysis" },
+  fgi_group_comparison: { "한국어": "FGI 그룹 비교 분석", "English": "FGI Group Comparison" },
   guide_file: { "한국어": "가이드 파일", "English": "Guide File" },
   fgi_file: { "한국어": "FGI 파일", "English": "FGI File" },
-  topics_count: { "한국어": "주제 수", "English": "Topics Count" }
+  topics_count: { "한국어": "주제 수", "English": "Topics Count" },
+  compared_groups: { "한국어": "비교 그룹", "English": "Compared Groups" },
+  total_topics: { "한국어": "총 주제 수", "English": "Total Topics" }
 };
 
 interface SurveyPlan {
@@ -120,6 +123,19 @@ interface FGISubjectAnalysis {
   description: string;
 }
 
+interface FIGGroupComparison {
+  id: string;
+  user_id: string;
+  guide_file_name: string;
+  group_names: string[];
+  summary: string;
+  recommendations: string;
+  total_topics: number;
+  analysis_status: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export default function DashboardPage() {
   const { lang } = useLanguage();
   const { user, loading: authLoading } = useAuth('/dashboard');
@@ -130,6 +146,7 @@ export default function DashboardPage() {
   // FGI 주제별 분석 관련 상태 제거
   // const [fgiTopicAnalyses, setFgiTopicAnalyses] = useState<any[]>([]);
   const [fgiSubjectAnalyses, setFgiSubjectAnalyses] = useState<FGISubjectAnalysis[]>([]);
+  const [fgiGroupComparisons, setFgiGroupComparisons] = useState<FIGGroupComparison[]>([]);
   const [ragSessions, setRagSessions] = useState<any[]>([]);
   const [favorites, setFavorites] = useState<any[]>([]);
   const [copySuccessQA, setCopySuccessQA] = useState<string | null>(null);
@@ -210,6 +227,17 @@ export default function DashboardPage() {
       if (!fgiSubjectAnalysesResponse.error && fgiSubjectAnalysesResponse.data) {
         setFgiSubjectAnalyses(fgiSubjectAnalysesResponse.data);
       }
+
+      // FGI 그룹 비교 분석 로드
+      const fgiGroupComparisonsResponse = await fetch(`/api/fgi_group_analysis?user_id=${user.id}`, {
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`
+        }
+      });
+      if (fgiGroupComparisonsResponse.ok) {
+        const fgiGroupComparisonsData = await fgiGroupComparisonsResponse.json();
+        setFgiGroupComparisons(fgiGroupComparisonsData.comparisons || []);
+      }
     } catch (error) {
       console.error('데이터 로드 오류:', error);
       setError(error instanceof Error ? error.message : TEXT.error[lang]);
@@ -271,7 +299,7 @@ export default function DashboardPage() {
     }
   }, [user, loadData, loadRagSessions, loadFavorites]);
 
-  const handleDelete = async (type: 'plan' | 'analysis' | 'visualization' | 'fgi-analysis' | 'fgi-subject-analysis', id: string) => {
+  const handleDelete = async (type: 'plan' | 'analysis' | 'visualization' | 'fgi-analysis' | 'fgi-subject-analysis' | 'fgi-group-comparison', id: string) => {
     if (!confirm(TEXT.confirm_delete[lang])) return;
     
     try {
@@ -300,6 +328,20 @@ export default function DashboardPage() {
         
         // 데이터 다시 로드
         loadData();
+      } else if (type === 'fgi-group-comparison') {
+        // FGI 그룹 비교 분석 삭제
+        const deleteResponse = await fetch(`/api/fgi_group_analysis?comparison_id=${id}&user_id=${user?.id}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`
+          }
+        });
+        
+        if (deleteResponse.ok) {
+          setFgiGroupComparisons(prev => prev.filter(item => item.id !== id));
+        } else {
+          throw new Error('삭제에 실패했습니다.');
+        }
       } else {
         const response = await fetch(`${endpoint}/${id}`, {
           method: 'DELETE',
@@ -589,6 +631,10 @@ export default function DashboardPage() {
           <TabsTrigger value="fgi-subject-analyses" className="flex items-center gap-2">
             <FileText className="h-4 w-4" />
             {TEXT.fgi_subject_analysis[lang]} ({fgiSubjectAnalyses.length})
+          </TabsTrigger>
+          <TabsTrigger value="fgi-group-comparisons" className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4" />
+            {TEXT.fgi_group_comparison[lang]} ({fgiGroupComparisons.length})
           </TabsTrigger>
           <TabsTrigger value="favorites">FGI 질의 응답</TabsTrigger>
         </TabsList>
@@ -1075,6 +1121,67 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex gap-2">
                       <Link href={`/dashboard/fgi-subject-analyses/${item.id}`}>
+                        <Button size="sm" variant="outline" className="flex-1">
+                          <Eye className="h-3 w-3 mr-1" />
+                          {TEXT.view[lang]}
+                        </Button>
+                      </Link>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="fgi-group-comparisons" className="mt-6">
+          {fgiGroupComparisons.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <p className="text-gray-500">{TEXT.no_data[lang]}</p>
+                <Link href="/FGI-analysis">
+                  <Button className="mt-4">첫 번째 그룹 비교 분석하기</Button>
+                </Link>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {fgiGroupComparisons.map((comparison) => (
+                <Card key={comparison.id} className="hover:shadow-lg transition-shadow">
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center justify-between">
+                      <span className="truncate">{comparison.guide_file_name}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDelete('fgi-group-comparison', comparison.id)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">{TEXT.compared_groups[lang]}</p>
+                      <p className="text-sm text-gray-800">{comparison.group_names.join(', ')}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">{TEXT.total_topics[lang]}</p>
+                      <p className="text-sm text-gray-800">{comparison.total_topics}개</p>
+                    </div>
+                    {comparison.summary && (
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">전체 요약</p>
+                        <p className="text-sm text-gray-800 line-clamp-3">{comparison.summary}</p>
+                      </div>
+                    )}
+                    <div className="flex items-center text-xs text-gray-500">
+                      <Calendar className="h-3 w-3 mr-1" />
+                      {formatDate(comparison.created_at)}
+                    </div>
+                    <div className="flex gap-2">
+                      <Link href={`/dashboard/fgi-group-comparisons/${comparison.id}`}>
                         <Button size="sm" variant="outline" className="flex-1">
                           <Eye className="h-3 w-3 mr-1" />
                           {TEXT.view[lang]}

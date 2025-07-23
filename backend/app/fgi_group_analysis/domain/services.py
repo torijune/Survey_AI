@@ -3,6 +3,7 @@ from app.fgi_group_analysis.domain.entities import GroupAnalysisResult, GroupCom
 from app.fgi_group_analysis.infra.supabase_client import get_supabase
 from datetime import datetime
 from app.fgi_group_analysis.infra.openai_client import OpenAIClient
+from app.fgi_group_analysis.infra.group_comparison_repository import GroupComparisonRepository
 from ..api.ws_router import ws_send_group_analysis_progress
 import json
 
@@ -12,6 +13,7 @@ class GroupAnalysisService:
     def __init__(self):
         self.supabase = get_supabase()
         self.openai_client = OpenAIClient()
+        self.repository = GroupComparisonRepository()
     
     async def get_group_analyses_by_guide(self, guide_file_name: str, user_id: str) -> Dict[str, List[Dict[str, Any]]]:
         """가이드라인 파일명으로 그룹별 분석 결과를 조회합니다."""
@@ -79,6 +81,29 @@ class GroupAnalysisService:
             
             # 주제별 분석 결과를 종합하여 최종 비교 분석 수행
             final_analysis = await self._create_final_comparison(selected_groups, topic_comparisons, job_id)
+            
+            # DB에 결과 저장
+            if job_id:
+                await ws_send_group_analysis_progress(job_id, {
+                    "progress": "분석 결과 저장 중...",
+                    "current": 95,
+                    "total": 100,
+                    "step": "saving"
+                })
+            
+            try:
+                comparison_id = await self.repository.save_group_comparison(
+                    user_id=user_id,
+                    guide_file_name=guide_file_name,
+                    group_names=group_names,
+                    summary=final_analysis.get('summary', ''),
+                    recommendations=final_analysis.get('recommendations', ''),
+                    topic_comparisons=final_analysis.get('topic_comparisons', {})
+                )
+                final_analysis['comparison_id'] = comparison_id
+            except Exception as e:
+                print(f"Error saving comparison to DB: {e}")
+                # 저장 실패해도 분석 결과는 반환
             
             if job_id:
                 await ws_send_group_analysis_progress(job_id, {

@@ -4,6 +4,7 @@ import json
 
 from ..application.use_cases import GetGroupAnalysisUseCase, CompareGroupAnalysisUseCase
 from ..domain.entities import GroupAnalysisRequest, GroupComparisonRequest
+from ..domain.services import GroupAnalysisService
 
 router = APIRouter()
 
@@ -86,4 +87,67 @@ async def compare_group_analysis(request: Request):
         raise
     except Exception as e:
         print(f"Error in compare_group_analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/group-comparisons")
+async def get_user_group_comparisons(user_id: str = Query(...)):
+    """사용자의 그룹 비교 분석 목록을 조회합니다."""
+    try:
+        service = GroupAnalysisService()
+        comparisons = await service.repository.get_user_group_comparisons(user_id)
+        return {"comparisons": [comp.dict() for comp in comparisons]}
+    except Exception as e:
+        print(f"Error in get_user_group_comparisons: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/group-comparisons/{comparison_id}")
+async def get_group_comparison_detail(comparison_id: str):
+    """특정 그룹 비교 분석 결과를 조회합니다."""
+    try:
+        service = GroupAnalysisService()
+        result = await service.repository.get_group_comparison_with_topics(comparison_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Group comparison not found")
+        return result.dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in get_group_comparison_detail: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/group-comparisons/{comparison_id}")
+async def delete_group_comparison(comparison_id: str, user_id: str = Query(...)):
+    """그룹 비교 분석 결과를 삭제합니다."""
+    try:
+        service = GroupAnalysisService()
+        success = await service.repository.delete_group_comparison(comparison_id, user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Group comparison not found or access denied")
+        return {"message": "Group comparison deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in delete_group_comparison: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/group-analysis/save-metadata")
+async def save_group_comparison_metadata(
+    comparison_id: str = Form(...),
+    title: str = Form(...),
+    description: str = Form(""),
+    user_id: str = Form(...)
+):
+    """그룹 비교 분석의 제목과 설명을 저장합니다."""
+    try:
+        service = GroupAnalysisService()
+        success = await service.repository.update_group_comparison_metadata(
+            comparison_id, user_id, title, description
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="Group comparison not found or access denied")
+        return {"message": "Metadata saved successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in save_group_comparison_metadata: {e}")
         raise HTTPException(status_code=500, detail=str(e)) 

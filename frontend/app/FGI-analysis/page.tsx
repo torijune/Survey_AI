@@ -199,6 +199,7 @@ export default function FGIAnalysisPage() {
   const [groupComparisonLoading, setGroupComparisonLoading] = useState(false);
   const [groupComparisonResult, setGroupComparisonResult] = useState<any>(null);
   const [showComparisonModal, setShowComparisonModal] = useState(false);
+  const [showSaveComparisonModal, setShowSaveComparisonModal] = useState(false);
   const [groupAnalysisProgress, setGroupAnalysisProgress] = useState<{
     current: number;
     total: number;
@@ -209,6 +210,9 @@ export default function FGIAnalysisPage() {
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
+  const [saveTitle, setSaveTitle] = useState('');
+  const [saveDescription, setSaveDescription] = useState('');
+  const [showSaveUI, setShowSaveUI] = useState(false);
 
   // useSearchParams를 useEffect에서 안전하게 사용
   useEffect(() => {
@@ -1139,6 +1143,44 @@ export default function FGIAnalysisPage() {
     setShowGroupDetailModal(true);
   };
 
+  // 그룹 비교 분석 저장 핸들러
+  const handleSaveGroupComparison = async (title: string, description: string) => {
+    if (!user || !groupComparisonResult) return;
+    
+    try {
+      setSaving(true);
+      
+      // 백엔드에 저장 요청 (이미 자동으로 저장되므로 여기서는 제목/설명만 업데이트)
+      const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
+      const formData = new FormData();
+      formData.append('comparison_id', groupComparisonResult.comparison_id || '');
+      formData.append('title', title);
+      formData.append('description', description);
+      formData.append('user_id', user.id);
+      
+      const response = await fetch(`${baseUrl}/api/group-analysis/save-metadata`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (response.ok) {
+        setSaved(true);
+        setShowSaveComparisonModal(false);
+        setShowComparisonModal(true); // 결과 모달 표시
+        
+        // 성공 메시지
+        alert('그룹 비교 분석이 성공적으로 저장되었습니다!');
+      } else {
+        throw new Error('저장에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('Error saving group comparison:', error);
+      alert('저장 중 오류가 발생했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // 그룹 비교 분석 핸들러
   const handleGroupComparison = async () => {
     if (selectedGroups.length < 2) {
@@ -1204,10 +1246,11 @@ export default function FGIAnalysisPage() {
         
         // 분석 완료 시 처리 (모든 주제 분석 완료 후)
         if (data.status === "completed" && data.step === "completed") {
+          setGroupComparisonResult(data); // 결과 먼저 세팅
           setGroupComparisonLoading(false);
           setGroupAnalysisProgress({ current: 100, total: 100, step: 'completed' });
           ws.close();
-          setShowComparisonModal(true);
+          setShowSaveUI(true); // 저장 UI 표시
         }
       } catch (e) {
         console.error('WebSocket 메시지 파싱 오류:', e);
@@ -2289,13 +2332,84 @@ export default function FGIAnalysisPage() {
                               총 {Object.keys(groupComparisonResult.topic_comparisons || {}).length}개 주제 분석 완료
                             </p>
                           </div>
-                          <Button
-                            size="sm"
-                            className="bg-green-600 hover:bg-green-700 text-white"
-                            onClick={() => setShowComparisonModal(true)}
-                          >
-                            결과 보기
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700 text-white"
+                              onClick={() => setShowComparisonModal(true)}
+                            >
+                              결과 보기
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 저장 UI */}
+                    {showSaveUI && groupComparisonResult && (
+                      <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                        <h3 className="text-lg font-semibold text-blue-800 dark:text-blue-200 mb-4">
+                          📝 분석 결과 저장
+                        </h3>
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                              제목 *
+                            </label>
+                            <input
+                              type="text"
+                              value={saveTitle}
+                              onChange={(e) => setSaveTitle(e.target.value)}
+                              className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                              placeholder="분석 제목을 입력하세요"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                              설명
+                            </label>
+                            <textarea
+                              value={saveDescription}
+                              onChange={(e) => setSaveDescription(e.target.value)}
+                              className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                              rows={3}
+                              placeholder="분석에 대한 설명을 입력하세요"
+                            />
+                          </div>
+                          <div className="text-sm text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 p-3 rounded border">
+                            <p><strong>비교 그룹:</strong> {selectedGroups.join(', ')}</p>
+                            <p><strong>총 주제 수:</strong> {Object.keys(groupComparisonResult.topic_comparisons || {}).length}개</p>
+                            <p><strong>분석 완료:</strong> {new Date().toLocaleString()}</p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              onClick={async () => {
+                                if (!saveTitle.trim()) {
+                                  alert('제목을 입력해주세요.');
+                                  return;
+                                }
+                                await handleSaveGroupComparison(saveTitle, saveDescription);
+                                setShowSaveUI(false);
+                                setSaveTitle('');
+                                setSaveDescription('');
+                              }}
+                              className="bg-blue-600 hover:bg-blue-700 text-white"
+                              disabled={saving}
+                            >
+                              {saving ? '저장 중...' : '저장하기'}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                setShowSaveUI(false);
+                                setSaveTitle('');
+                                setSaveDescription('');
+                              }}
+                              className="border-gray-300 text-gray-700 hover:bg-gray-50"
+                            >
+                              취소
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -2566,6 +2680,18 @@ export default function FGIAnalysisPage() {
           </div>
         )}
       </main>
+
+      {/* 저장 모달들 */}
+      {saveQAModal && (
+        <SaveQAModal
+          open={saveQAModal.open}
+          onClose={() => setSaveQAModal(null)}
+          onSave={(title, description) => handleSaveQA(saveQAModal.q, saveQAModal.a, title, description)}
+          question={saveQAModal.q}
+          answer={saveQAModal.a}
+          fileName={fileNameForSave}
+        />
+      )}
     </div>
   );
 } 
