@@ -192,6 +192,20 @@ export default function FGIAnalysisPage() {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
   const [groupAnalysisLoading, setGroupAnalysisLoading] = useState(false);
   const [groupAnalysisError, setGroupAnalysisError] = useState<string | null>(null);
+  // 그룹 상세 보기 모달 상태
+  const [showGroupDetailModal, setShowGroupDetailModal] = useState(false);
+  const [selectedGroupDetail, setSelectedGroupDetail] = useState<any>(null);
+  // 그룹 비교 분석 상태
+  const [groupComparisonLoading, setGroupComparisonLoading] = useState(false);
+  const [groupComparisonResult, setGroupComparisonResult] = useState<any>(null);
+  const [showComparisonModal, setShowComparisonModal] = useState(false);
+  const [groupAnalysisProgress, setGroupAnalysisProgress] = useState<{
+    current: number;
+    total: number;
+    step: string;
+    topic?: string;
+    topicIndex?: number;
+  }>({ current: 0, total: 100, step: '' });
 
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -740,6 +754,37 @@ export default function FGIAnalysisPage() {
     setGuideFile(file);
     setGuideTopics([]);
     
+    // 그룹별 분석 모드인 경우 해당 가이드라인의 그룹 분석 결과를 가져옴
+    if (analysisMode === "group-analysis") {
+      try {
+        const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
+        const formData = new FormData();
+        formData.append('guide_file_name', file.name);
+        formData.append('user_id', user?.id || "");
+        
+        const res = await fetch(`${baseUrl}/api/group-analysis/by-guide`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          setGroupAnalysisResults(data.groups || {});
+          setGroupAnalysisError(null);
+          console.log('그룹 분석 결과 로드됨:', data.groups);
+        } else {
+          console.error('그룹 분석 결과 로드 실패:', res.status);
+          setGroupAnalysisResults({});
+        }
+      } catch (error) {
+        console.error('그룹 분석 결과 로드 중 오류:', error);
+        setGroupAnalysisResults({});
+      } finally {
+        setGuideLoading(false);
+        return; // 그룹별 분석 모드에서는 주제 추출을 하지 않음
+      }
+    }
+    
     // 1. 먼저 기존 주제 확인
     setIsCheckingExistingTopics(true);
     try {
@@ -1087,6 +1132,135 @@ export default function FGIAnalysisPage() {
       setGroupAnalysisLoading(false);
     }
   }, [user]);
+
+  // 그룹 상세 보기 핸들러
+  const handleGroupDetailView = (groupName: string, analyses: any[]) => {
+    setSelectedGroupDetail({ groupName, analyses });
+    setShowGroupDetailModal(true);
+  };
+
+  // 그룹 비교 분석 핸들러
+  const handleGroupComparison = async () => {
+    if (selectedGroups.length < 2) {
+      alert('비교할 그룹을 2개 이상 선택해주세요.');
+      return;
+    }
+    
+    setGroupComparisonLoading(true);
+    
+    // job_id 생성
+    const job_id = crypto.randomUUID();
+    
+    // WebSocket 연결
+    const wsUrl = (process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000").replace(/^http/, 'ws') + `/ws/group-analysis-progress/${job_id}`;
+    const ws = new WebSocket(wsUrl);
+    
+    ws.onopen = () => {
+      console.log('그룹 분석 WebSocket 연결 성공');
+      // 연결 유지용 ping
+      const ping = setInterval(() => ws.send('ping'), 30000);
+      ws.onclose = () => {
+        console.log('그룹 분석 WebSocket 연결 종료');
+        clearInterval(ping);
+      };
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('그룹 분석 WebSocket 메시지:', data);
+        
+        // 진행 상황 업데이트
+        if (data.progress) {
+          setProgress(data.progress);
+        }
+        
+        // 진행률 업데이트
+        if (data.current !== undefined && data.total !== undefined) {
+          setGroupAnalysisProgress({
+            current: data.current,
+            total: data.total,
+            step: data.step || '',
+            topic: data.topic,
+            topicIndex: data.topic_index
+          });
+        }
+        
+        // 진행 메시지 업데이트
+        if (data.progress) {
+          setProgress(data.progress);
+        }
+        
+        // 주제별 분석 결과 실시간 반영
+        if (data.topic && data.topic_summary) {
+          setGroupComparisonResult((prev: any) => ({
+            ...prev,
+            topic_comparisons: {
+              ...prev?.topic_comparisons,
+              [data.topic]: data.topic_summary
+            }
+          }));
+        }
+        
+        // 분석 완료 시 처리 (모든 주제 분석 완료 후)
+        if (data.status === "completed" && data.step === "completed") {
+          setGroupComparisonLoading(false);
+          setGroupAnalysisProgress({ current: 100, total: 100, step: 'completed' });
+          ws.close();
+          setShowComparisonModal(true);
+        }
+      } catch (e) {
+        console.error('WebSocket 메시지 파싱 오류:', e);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket 오류:', error);
+      ws.close();
+    };
+    
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "http://localhost:8000";
+      const formData = new FormData();
+      formData.append('guide_file_name', guideFile?.name || '');
+      formData.append('user_id', user?.id || '');
+      formData.append('group_names', JSON.stringify(selectedGroups));
+      formData.append('job_id', job_id);
+      
+      // 디버깅을 위한 로그
+      console.log('Sending group comparison request:');
+      console.log('guide_file_name:', guideFile?.name);
+      console.log('user_id:', user?.id);
+      console.log('selectedGroups:', selectedGroups);
+      console.log('job_id:', job_id);
+      
+      const res = await fetch(`${baseUrl}/api/group-analysis/compare`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      console.log('Response status:', res.status);
+      
+      if (res.ok) {
+        const data = await res.json();
+        setGroupComparisonResult(data);
+        console.log('그룹 비교 분석 결과:', data);
+      } else {
+        const errorText = await res.text();
+        console.error('그룹 비교 분석 실패:', res.status, errorText);
+        alert('그룹 비교 분석 중 오류가 발생했습니다.');
+        ws.close();
+      }
+    } catch (error) {
+      console.error('그룹 비교 분석 중 오류:', error);
+      alert('그룹 비교 분석 중 오류가 발생했습니다.');
+      ws.close();
+    } finally {
+      if (ws.readyState !== WebSocket.OPEN) {
+        setGroupComparisonLoading(false);
+      }
+    }
+  };
 
   if (authLoading) {
     return (
@@ -1965,42 +2139,430 @@ export default function FGIAnalysisPage() {
             </div>
           </div>
         )}
+        {/* group-analysis 메인 카드 UI */}
         {analysisMode === "group-analysis" && guideFile && !groupAnalysisLoading && Object.keys(groupAnalysisResults).length > 0 && (
-          <div className="w-full max-w-5xl mx-auto flex flex-col gap-8">
-            <h2 className="text-xl font-bold mb-2">그룹별 분석 결과</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {Object.entries(groupAnalysisResults).map(([group, analyses]: any) => (
-                <Card key={group} className={`hover:shadow-lg transition-shadow border-2 ${selectedGroups.includes(group) ? 'border-blue-500' : 'border-gray-200 dark:border-gray-700'}`}>
-                  <CardHeader className="flex flex-row items-center justify-between cursor-pointer select-none">
-                    <div className="flex-1">
-                      <div className="font-bold text-base mb-1 flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={selectedGroups.includes(group)}
-                          onChange={() => setSelectedGroups(selectedGroups.includes(group) ? selectedGroups.filter(g => g !== group) : [...selectedGroups, group])}
-                          className="accent-blue-500 w-5 h-5 mr-2"
-                        />
-                        {group}
+          <div className="w-full">
+            <Card className="w-full shadow-lg border-gray-200 dark:border-gray-700">
+              <CardHeader>
+                <CardTitle className="text-2xl font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                  <FileText className="w-6 h-6 text-blue-500" />
+                  그룹별 분석 결과
+                </CardTitle>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  가이드라인: {guideFile.name}
+                </p>
+              </CardHeader>
+              <CardContent className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {Object.entries(groupAnalysisResults).map(([group, analyses]: any) => (
+                    <Card key={group} className={`hover:shadow-lg transition-shadow border-2 ${selectedGroups.includes(group) ? 'border-blue-500 bg-blue-50 dark:bg-blue-900' : 'border-gray-200 dark:border-gray-700'}`}>
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedGroups.includes(group)}
+                              onChange={() => setSelectedGroups(selectedGroups.includes(group) ? selectedGroups.filter(g => g !== group) : [...selectedGroups, group])}
+                              className="accent-blue-500 w-5 h-5"
+                            />
+                            <div className="font-bold text-lg text-gray-800 dark:text-gray-200">{group}</div>
+                          </div>
+                          <div className="text-xs text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
+                            분석 {analyses.length}건
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <div className="space-y-3">
+                          <div>
+                            <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">제목</div>
+                            <div className="text-sm text-gray-800 dark:text-gray-200 line-clamp-2">
+                              {analyses[0]?.title || '제목 없음'}
+                            </div>
+                          </div>
+                          {analyses[0]?.description && (
+                            <div>
+                              <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">설명</div>
+                              <div className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
+                                {analyses[0].description}
+                              </div>
+                            </div>
+                          )}
+                          <div>
+                            <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">주요 주제</div>
+                            <div className="space-y-1">
+                              {Array.isArray(analyses[0]?.topics) && analyses[0].topics.slice(0, 3).map((topic: string, idx: number) => (
+                                <div key={idx} className="text-xs text-gray-600 dark:text-gray-400 flex items-start gap-1">
+                                  <span className="text-blue-500 mt-1">•</span>
+                                  <span className="line-clamp-2">{topic.replace(/^\s*[\d]+[.)\-:•▷]?\s*/, '')}</span>
+                                </div>
+                              ))}
+                              {Array.isArray(analyses[0]?.topics) && analyses[0].topics.length > 3 && (
+                                <div className="text-xs text-gray-500 dark:text-gray-500">
+                                  + {analyses[0].topics.length - 3}개 더 있음
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                            <div className="text-xs text-gray-500 dark:text-gray-400">
+                              최근 분석: {analyses[0]?.created_at?.slice(0, 10)}
+                            </div>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="w-full mt-2 text-xs"
+                              onClick={() => handleGroupDetailView(group, analyses)}
+                            >
+                              자세히 보기
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+                {/* 선택된 그룹이 있을 때 비교 버튼 표시 */}
+                {selectedGroups.length > 0 && (
+                  <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm text-gray-600 dark:text-gray-400">
+                        선택된 그룹: {selectedGroups.join(', ')} ({selectedGroups.length}개)
                       </div>
-                      <div className="text-xs text-gray-500 mb-1">분석 {analyses.length}건</div>
-                      <div className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">
-                        {analyses[0]?.description || analyses[0]?.title || '설명 없음'}
-                      </div>
+                      <Button 
+                        className="bg-blue-600 hover:bg-blue-700 text-white"
+                        onClick={handleGroupComparison}
+                        disabled={selectedGroups.length < 2 || groupComparisonLoading}
+                      >
+                        {groupComparisonLoading ? '분석 중...' : '그룹 비교 분석 시작'}
+                      </Button>
                     </div>
-                  </CardHeader>
-                  <CardContent className="pt-0 pb-4">
-                    <div className="prose dark:prose-invert max-w-none text-xs">
-                      {/* 대표 주제 일부만 노출 */}
-                      {Array.isArray(analyses[0]?.topics) && analyses[0].topics.slice(0, 3).map((topic: string, idx: number) => (
-                        <div key={idx} className="mb-1">• {topic}</div>
+                    
+                    {/* 그룹 분석 진행상황 표시 */}
+                    {groupComparisonLoading && (
+                      <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                            그룹 비교 분석 진행 중...
+                          </span>
+                          <span className="text-xs text-blue-600 dark:text-blue-300">
+                            {groupAnalysisProgress.current}% ({groupAnalysisProgress.current}/{groupAnalysisProgress.total})
+                          </span>
+                        </div>
+                        
+                        {/* 진행바 */}
+                        <div className="w-full bg-blue-200 dark:bg-blue-700 rounded-full h-2 mb-3">
+                          <div 
+                            className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${(groupAnalysisProgress.current / groupAnalysisProgress.total) * 100}%` }}
+                          ></div>
+                        </div>
+                        
+                        {/* 진행 메시지 */}
+                        <div className="text-sm text-blue-700 dark:text-blue-300">
+                          {progress || '분석 준비 중...'}
+                        </div>
+                        
+                        {/* 현재 분석 중인 주제 */}
+                        {groupAnalysisProgress.topic && (
+                          <div className="mt-2 text-xs text-blue-600 dark:text-blue-400">
+                            현재 분석: {groupAnalysisProgress.topic}
+                            {groupAnalysisProgress.topicIndex !== undefined && (
+                              <span className="ml-1">
+                                ({groupAnalysisProgress.topicIndex + 1}번째 주제)
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* 분석 완료 후 결과 확인 안내 */}
+                    {!groupComparisonLoading && groupComparisonResult && (
+                      <div className="mt-4 p-4 bg-green-50 dark:bg-green-900 rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-sm font-medium text-green-800 dark:text-green-200">
+                              ✅ 그룹 비교 분석 완료!
+                            </span>
+                            <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                              총 {Object.keys(groupComparisonResult.topic_comparisons || {}).length}개 주제 분석 완료
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            className="bg-green-600 hover:bg-green-700 text-white"
+                            onClick={() => setShowComparisonModal(true)}
+                          >
+                            결과 보기
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+        {/* 그룹별 분석 결과가 없을 때 메시지 */}
+        {analysisMode === "group-analysis" && guideFile && !groupAnalysisLoading && Object.keys(groupAnalysisResults).length === 0 && (
+          <div className="w-full">
+            <Card className="w-full shadow-lg border-gray-200 dark:border-gray-700">
+              <CardHeader>
+                <CardTitle className="text-2xl font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                  <FileText className="w-6 h-6 text-blue-500" />
+                  그룹별 분석 결과
+                </CardTitle>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                 가이드라인: {guideFile.name}
+                </p>
+              </CardHeader>
+              <CardContent className="p-6">
+                <div className="text-center py-12">
+                  <div className="text-gray-500 dark:text-gray-400 mb-4">
+                    <FileText className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                    <h3 className="text-lg font-medium mb-2">분석 결과가 없습니다</h3>
+                    <p className="text-sm">
+                      이 가이드라인 파일로 분석된 그룹이 아직 없습니다.
+                    </p>
+                    <p className="text-sm mt-2">
+                      먼저 다른 모드에서 FGI 분석을 진행한 후 다시 확인해보세요.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+        {/* 그룹 상세 보기 모달 */}
+        {showGroupDetailModal && selectedGroupDetail && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+              {/* 모달 헤더 */}
+              <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200">
+                    {selectedGroupDetail.groupName} - 상세 분석 결과
+                  </h2>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                    분석 {selectedGroupDetail.analyses.length}건
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowGroupDetailModal(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </Button>
+              </div>
+              
+              {/* 모달 내용 - 스크롤 가능 */}
+              <div className="flex-1 overflow-y-auto p-6">
+                <div className="space-y-6">
+                  {selectedGroupDetail.analyses.map((analysis: any, idx: number) => (
+                    <Card key={analysis.id || idx} className="border border-gray-200 dark:border-gray-700">
+                      <CardHeader>
+                        <CardTitle className="text-lg flex items-center justify-between">
+                          <span>{analysis.title || `분석 ${idx + 1}`}</span>
+                          <span className="text-sm text-gray-500">
+                            {analysis.created_at?.slice(0, 10)}
+                          </span>
+                        </CardTitle>
+                        {analysis.description && (
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
+                            {analysis.description}
+                          </p>
+                        )}
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        {/* 주제 목록 */}
+                        <div>
+                          <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">분석 주제 ({analysis.topics?.length || 0}개)</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {Array.isArray(analysis.topics) && analysis.topics.map((topic: string, topicIdx: number) => (
+                              <div key={topicIdx} className="text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 p-2 rounded">
+                                {topicIdx + 1}. {topic.replace(/^\s*[\d]+[.)\-:•▷]?\s*/, '')}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        
+                        {/* 분석 결과 */}
+                        {Array.isArray(analysis.results) && analysis.results.length > 0 && (
+                          <div>
+                            <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">분석 결과</h4>
+                            <div className="space-y-3">
+                              {analysis.results.map((result: any, resultIdx: number) => (
+                                <div key={resultIdx} className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                                  <div className="font-medium text-gray-800 dark:text-gray-200 mb-2">
+                                    {result.topic || `주제 ${resultIdx + 1}`}
+                                  </div>
+                                  <div className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-line">
+                                    {result.result}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* 그룹 비교 분석 결과 모달 */}
+        {showComparisonModal && groupComparisonResult && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-6xl max-h-[95vh] flex flex-col">
+              {/* 모달 헤더 */}
+              <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200">
+                    그룹 비교 분석 결과
+                  </h2>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                    비교 그룹: {selectedGroups.join(' vs ')}
+                  </p>
+                  <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                    💡 결과를 닫아도 '결과 다시 보기' 버튼으로 언제든 확인할 수 있습니다
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowComparisonModal(false)}
+                    className="text-gray-600 hover:text-gray-800 border-gray-300"
+                  >
+                    닫기
+                  </Button>
+                </div>
+              </div>
+              
+              {/* 모달 내용 - 스크롤 가능 */}
+              <div className="flex-1 overflow-y-auto p-6">
+                <div className="space-y-6">
+                  {/* 전체 요약 */}
+                  {groupComparisonResult.summary && (
+                    <Card className="border border-gray-200 dark:border-gray-700">
+                      <CardHeader>
+                        <CardTitle className="text-lg">전체 비교 요약</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="prose dark:prose-invert max-w-none">
+                          <ReactMarkdown>
+                            {groupComparisonResult.summary}
+                          </ReactMarkdown>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                  
+                  {/* 주제별 비교 */}
+                  {groupComparisonResult.topic_comparisons && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200">주제별 비교 분석</h3>
+                        <span className="text-sm text-gray-600 dark:text-gray-400">
+                          총 {Object.keys(groupComparisonResult.topic_comparisons).length}개 주제
+                        </span>
+                      </div>
+                      {Object.entries(groupComparisonResult.topic_comparisons).map(([topic, comparison]: [string, any], index: number) => (
+                        <Card key={topic} className="border border-gray-200 dark:border-gray-700">
+                          <CardHeader>
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="text-md">
+                                <span className="text-blue-600 dark:text-blue-400 mr-2">#{index + 1}</span>
+                                {topic}
+                              </CardTitle>
+                              <div className="flex gap-2">
+                                <span className="px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs rounded">
+                                  공통점
+                                </span>
+                                <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded">
+                                  차이점
+                                </span>
+                                <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 text-xs rounded">
+                                  인사이트
+                                </span>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            {/* 공통점 */}
+                            {comparison.common_points && (
+                              <div>
+                                <h4 className="font-medium text-green-700 dark:text-green-300 mb-2 flex items-center">
+                                  <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                                  공통점
+                                </h4>
+                                <div className="bg-green-50 dark:bg-green-900 p-3 rounded text-sm border-l-4 border-green-500">
+                                  <ReactMarkdown>
+                                    {comparison.common_points}
+                                  </ReactMarkdown>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* 차이점 */}
+                            {comparison.differences && (
+                              <div>
+                                <h4 className="font-medium text-blue-700 dark:text-blue-300 mb-2 flex items-center">
+                                  <span className="w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
+                                  차이점
+                                </h4>
+                                <div className="bg-blue-50 dark:bg-blue-900 p-3 rounded text-sm border-l-4 border-blue-500">
+                                  <ReactMarkdown>
+                                    {comparison.differences}
+                                  </ReactMarkdown>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* 인사이트 */}
+                            {comparison.insights && (
+                              <div>
+                                <h4 className="font-medium text-purple-700 dark:text-purple-300 mb-2 flex items-center">
+                                  <span className="w-2 h-2 bg-purple-500 rounded-full mr-2"></span>
+                                  주요 인사이트
+                                </h4>
+                                <div className="bg-purple-50 dark:bg-purple-900 p-3 rounded text-sm border-l-4 border-purple-500">
+                                  <ReactMarkdown>
+                                    {comparison.insights}
+                                  </ReactMarkdown>
+                                </div>
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
                       ))}
                     </div>
-                    <div className="text-xs text-gray-400 mt-2">최근 분석: {analyses[0]?.created_at?.slice(0, 10)}</div>
-                  </CardContent>
-                </Card>
-              ))}
+                  )}
+                  
+                  {/* 권장사항 */}
+                  {groupComparisonResult.recommendations && (
+                    <Card className="border border-gray-200 dark:border-gray-700">
+                      <CardHeader>
+                        <CardTitle className="text-lg">종합 권장사항</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="prose dark:prose-invert max-w-none">
+                          <ReactMarkdown>
+                            {groupComparisonResult.recommendations}
+                          </ReactMarkdown>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+              </div>
             </div>
-            {/* 비교 버튼 등은 추후 추가 */}
           </div>
         )}
       </main>

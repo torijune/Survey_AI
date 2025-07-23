@@ -17,6 +17,7 @@ from app.planner.api.ws_router import ws_router as planner_ws_router
 from app.fgi_rag.api.router import router as fgi_rag_router
 from app.fgi_rag.api.ws_router import ws_router as fgi_subject_ws_router
 from app.fgi_group_analysis.api.group_analysis_router import router as fgi_group_analysis_router
+from app.fgi_group_analysis.api.ws_router import ws_router as fgi_group_analysis_ws_router
 
 app = FastAPI(title="Survey AI Backend", version="1.0.0")
 # CORS 설정
@@ -40,6 +41,7 @@ app.include_router(fgi_group_analysis_router, prefix="/api")
 app.include_router(fgi_ws_router)
 app.include_router(planner_ws_router)
 app.include_router(fgi_subject_ws_router)
+app.include_router(fgi_group_analysis_ws_router)
 
 @app.get("/")
 async def root():

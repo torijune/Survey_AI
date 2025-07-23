@@ -1,23 +1,34 @@
-from typing import List, Dict, Any, Optional
-from ..domain.services import GroupAnalysisService
-from ..domain.entities import GroupAnalysisResult, GroupComparisonRequest, GroupComparisonResult
+from abc import ABC, abstractmethod
+from typing import Dict, List, Any
+from app.fgi_group_analysis.domain.entities import GroupAnalysisRequest, GroupComparisonRequest, GroupComparisonResult, GroupAnalysisResult
+from app.fgi_group_analysis.domain.services import GroupAnalysisService
 
-class GetGroupAnalysesUseCase:
-    """그룹별 분석 결과 조회 Use Case"""
+class GetGroupAnalysisUseCase:
+    """그룹별 분석 결과 조회 유스케이스"""
     
-    def __init__(self, group_analysis_service: GroupAnalysisService):
-        self.service = group_analysis_service
+    def __init__(self):
+        self.service = GroupAnalysisService()
     
-    async def execute(self, guide_file_name: str, user_id: Optional[str] = None) -> Dict[str, List[GroupAnalysisResult]]:
+    async def execute(self, request: GroupAnalysisRequest) -> Dict[str, Any]:
         """가이드라인 파일명으로 그룹별 분석 결과를 조회합니다."""
-        return await self.service.get_group_analyses_by_guide(guide_file_name, user_id)
+        groups = await self.service.get_group_analyses_by_guide(
+            request.guide_file_name, 
+            request.user_id
+        )
+        return {"groups": groups}
 
-class CompareGroupsUseCase:
-    """그룹 비교 분석 Use Case"""
+class CompareGroupAnalysisUseCase:
+    """그룹 비교 분석 유스케이스"""
     
-    def __init__(self, group_analysis_service: GroupAnalysisService):
-        self.service = group_analysis_service
+    def __init__(self):
+        self.service = GroupAnalysisService()
     
-    async def execute(self, request: GroupComparisonRequest) -> GroupComparisonResult:
-        """선택된 그룹들을 비교 분석합니다."""
-        return await self.service.compare_groups(request) 
+    async def execute(self, request: GroupComparisonRequest, job_id: str = None) -> Dict[str, Any]:
+        """선택된 그룹들의 분석 결과를 비교합니다."""
+        result = await self.service.compare_groups(
+            request.guide_file_name,
+            request.user_id,
+            request.group_names,
+            job_id
+        )
+        return result 

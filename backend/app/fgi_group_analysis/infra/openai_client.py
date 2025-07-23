@@ -4,6 +4,7 @@ from langchain.schema import HumanMessage, SystemMessage
 import os
 from dotenv import load_dotenv
 from pydantic import SecretStr
+import openai
 
 load_dotenv()
 
@@ -59,4 +60,9 @@ class OpenAIClient:
                 data = await resp.json()
                 if resp.status != 200:
                     raise Exception(f"임베딩 API 오류: {data}")
-                return data["data"][0]["embedding"] 
+                return data["data"][0]["embedding"]
+
+
+def get_openai_client() -> openai.OpenAI:
+    """OpenAI 클라이언트 인스턴스를 반환합니다."""
+    return openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY")) 
