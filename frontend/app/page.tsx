@@ -19,7 +19,10 @@ const TEXT = {
   nav_ai_agent: { "한국어": "AI 에이전트", "English": "AI Agent" },
   nav_dashboard: { "한국어": "대시보드", "English": "Dashboard" },
   hero_title: { "한국어": "데이터 분석 플랫폼", "English": "Data Analysis Platform" },
-  hero_description: { "한국어": "Next.js, AI SDK, PostgreSQL 기반의 현대적 데이터 분석 솔루션. 일반 데이터 분석부터 AI 기반 설문분석까지 지원합니다.", "English": "Modern data analysis solution using Next.js, AI SDK, and PostgreSQL. Supporting everything from general data analysis to AI-powered survey analysis." },
+  hero_description: {
+    "한국어": "설문 설계부터 AI 자동 분석·보고서까지, 데이터 분석의 모든 과정을 한 번에!\n실무에 바로 쓰는 인사이트와 자동화된 리포트를 경험하세요.",
+    "English": "Modern data analysis solution using Next.js, AI SDK, and PostgreSQL. Supporting everything from general data analysis to AI-powered survey analysis."
+  },
   get_started_button: { "한국어": "시작하기", "English": "Get Started" },
   try_ai_analysis_button: { "한국어": "AI 분석 체험", "English": "Try AI Analysis" },
   general_data_analysis_title: { "한국어": "일반 데이터 분석", "English": "General Data Analysis" },
@@ -214,7 +217,7 @@ export default function HomeDemo() {
           <h2 className="text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4">
             {TEXT.hero_title[lang]}
           </h2>
-          <p className="text-xl text-gray-600 dark:text-gray-300 mb-8 max-w-3xl mx-auto">
+          <p className="text-xl text-gray-600 dark:text-gray-300 mb-8 max-w-3xl mx-auto whitespace-pre-line">
             {TEXT.hero_description[lang]}
           </p>
           <div className="flex justify-center space-x-4">

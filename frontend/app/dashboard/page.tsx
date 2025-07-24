@@ -606,7 +606,7 @@ export default function DashboardPage() {
       </div>
 
       <Tabs defaultValue="plans" className="w-full">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="plans" className="flex items-center gap-2">
             <FileText className="h-4 w-4" />
             {TEXT.plans[lang]} ({plans.length})
