@@ -13,6 +13,16 @@ export async function POST(req: NextRequest) {
     const userId = formData.get("user_id")?.toString() || "";
     const useStatisticalTest = formData.get("use_statistical_test")?.toString() || "true";
 
+    console.log("API Route Debug:", {
+      analysisType,
+      selectedKey,
+      lang,
+      userId,
+      useStatisticalTest,
+      hasFile: !!file,
+      hasRawDataFile: !!rawDataFile
+    });
+
     if (!file) {
       return NextResponse.json({ error: "파일이 필요합니다." }, { status: 400 });
     }
@@ -25,7 +35,7 @@ export async function POST(req: NextRequest) {
     let backendApi = "";
     
     if (analysisType === "analyze") {
-      backendApi = `${backendUrl}/api/v1/table-analysis/analyze`;
+      backendApi = `${backendUrl}/api/single-analysis/analyze`;
       backendForm.append("selected_key", selectedKey);
       backendForm.append("lang", lang);
       backendForm.append("user_id", userId);
@@ -35,32 +45,38 @@ export async function POST(req: NextRequest) {
         backendForm.append("batch_test_types", formData.get("batch_test_types")!.toString());
       }
     } else if (analysisType === "recommend_test_types") {
-      backendApi = `${backendUrl}/api/v1/table-analysis/analyze`;
+      backendApi = `${backendUrl}/api/single-analysis/recommend-test-types`;
       backendForm.append("analysis_type", "recommend_test_types");
       backendForm.append("lang", lang);
-      backendForm.append("user_id", userId);
       backendForm.append("use_statistical_test", useStatisticalTest);
     } else {
-      backendApi = `${backendUrl}/api/v1/table-analysis/parse`;
+      backendApi = `${backendUrl}/api/single-analysis/parse`;
+      backendForm.append("analysis_type", "parse");
       if (selectedKey) backendForm.append("selected_key", selectedKey);
     }
+
+    console.log("Backend API:", backendApi);
 
     const response = await fetch(backendApi, {
       method: "POST",
       body: backendForm,
     });
 
+    console.log("Backend Response Status:", response.status);
+
     if (!response.ok) {
       const errorText = await response.text();
+      console.error("Backend Error:", errorText);
       return NextResponse.json({ error: errorText }, { status: response.status });
     }
 
     const data = await response.json();
+    console.log("Backend Response Data:", data);
     return NextResponse.json(data);
   } catch (error) {
     console.error("Table analysis error:", error);
     return NextResponse.json(
-      { error: "서버 오류가 발생했습니다." },
+      { error: `서버 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}` },
       { status: 500 }
     );
   }

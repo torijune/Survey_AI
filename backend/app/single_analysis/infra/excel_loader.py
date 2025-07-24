@@ -122,4 +122,34 @@ class ExcelLoader:
                         matrix[i-1][j] + 1
                     )
         
-        return matrix[len(str1)][len(str2)] 
+        return matrix[len(str1)][len(str2)]
+    
+    def find_matching_key(self, selected_key: str, available_keys: List[str]) -> str:
+        """선택된 키와 가장 유사한 키를 찾기"""
+        if not selected_key or not available_keys:
+            return ""
+        
+        # 정확한 매칭
+        if selected_key in available_keys:
+            return selected_key
+        
+        # 부분 매칭
+        for key in available_keys:
+            if selected_key.lower() in key.lower() or key.lower() in selected_key.lower():
+                return key
+        
+        # Levenshtein 거리 기반 매칭
+        min_distance = float('inf')
+        best_match = ""
+        
+        for key in available_keys:
+            distance = self.levenshtein_distance(selected_key.lower(), key.lower())
+            if distance < min_distance:
+                min_distance = distance
+                best_match = key
+        
+        # 거리가 너무 크면 매칭 실패로 간주
+        if min_distance > len(selected_key) * 0.5:
+            return ""
+        
+        return best_match 
